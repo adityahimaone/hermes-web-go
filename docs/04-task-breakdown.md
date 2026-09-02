@@ -27,7 +27,9 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       0` acceptable temporarily if store isn't ready — but flag this explicitly, don't ship silently).
 - [ ] Deploy: Python process moved to bind an internal-only port; Go takes the public port.
       Confirm from a browser that the app is indistinguishable from before.
-- [ ] Exit check: replay Phase 0's golden fixtures against the new Go-fronted stack; 100% match.
+- [x] Exit check: replay Phase 0's golden fixtures against the new Go-fronted stack; 100% match.
+      Result: `3 exchanges match after redaction/normalization` (2026-09-02, commit `145be81`).
+      Go binary boots, serves static byte-identical, `/health` native, proxies non-native to Python.
 
 ## Phase 2 — Read-only data ports
 

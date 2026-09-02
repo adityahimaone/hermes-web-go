@@ -111,6 +111,14 @@ Browser ── HTTP/SSE ──▶  Go server (public port, e.g. 8787)
 |---|---|---|
 | 0 | Audit & harness | **Open/blocking:** endpoint/behavior inventory and harness are prepared, but Phase 0 cannot close until real supervised traffic creates and replays a golden fixture against disposable state |
 | 1 | Skeleton + proxy | Go binary boots, serves `static/`, proxies 100% of `/api/*` to Python untouched; this is the cutover of the *public port* with zero behavior change |
+
+## Phase 1 status (2026-09-02)
+
+Phase 1 landed on branch `phase-1`, commit `145be81`. Go binary boots, serves `static/` byte-identical (222182-byte `index.html` matches both Python source and the vendored copy), `/health` native JSON `{status,sessions}`, and proxies non-native routes to the legacy Python on an internal port. Verified by `go test ./...`, `go vet ./...`, `go build ./...`, a live two-process smoke (Go front :18787 → Python legacy :18788), and a Phase 0 harness replay (`3 exchanges match after redaction/normalization`).
+
+Known deviation: stdlib `http.FileServer` 301-redirects `/static/index.html` to `/static/`, but the Python WebUI serves it directly. Phase 1 special-cases `/static/index.html` to serve bytes without the redirect (regression test: `TestStaticIndexServesWithoutRedirect`). This is the only behavioral shim in Phase 1.
+
+The `/api/sessions` 500 in the smoke run is a **Python backend state issue**, not a Go proxy bug: a direct request to the legacy Python (`curl http://127.0.0.1:18788/api/sessions`) also returns 500 with `TypeError: '<' not supported between instances of 'str' and 'float'` inside `_build_session_list_cache_payload`. The Go reverse proxy forwarded the request and received the backend's 500 unchanged, which is correct proxy behavior. `/api/workspaces` (200) and other routes forward cleanly.
 | 2 | Read-only data ports | Sessions (list/get/search), workspaces, files (list/read/raw), health — Go-native, Python proxy removed for these routes only |
 | 3 | Mutations | Session CRUD, uploads, file ops (create/save/delete), workspace add/remove/rename |
 | 4 | Chat + streaming | `/api/chat/start`, `/api/chat/stream`, `/api/chat` fallback — Go owns HTTP/SSE plumbing, delegates actual generation to the Hermes agent gateway |
