@@ -58,8 +58,9 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       WITHOUT `HERMES_WEBUI_LEGACY_PROXY_URL` and returned 200 for all 8 routes directly from Go
       (not proxied).
 - [ ] Exit check: MVP definition of done (`03-mvp-scope.md`) fully satisfied; tag this as the MVP
-      release. Remaining MVP DoD items NOT yet met: #6 memory footprint baseline measured; #7 rollback
-      dry-run. These gate the actual MVP tag but not the Phase-2 read-only core.
+      release. Phase-2 evidence now covers the Go RSS baseline (measured ~4-9.8 MB idle) and
+      rollback dry-run (Go stop → Python 52378 stayed healthy 200, Go port reclaimed). Production
+      cutover/MVP release gate remains open until the full DoD is explicitly exercised.
 
 ## Phase 3 — Mutations
 
