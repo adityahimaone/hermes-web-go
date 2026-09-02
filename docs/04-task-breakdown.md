@@ -162,7 +162,12 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [ ] `internal/crons`: wrapper calling whatever the Hermes agent side exposes for
       `list_jobs`/`create_job`/`pause`/`resume`/`run` (likely another small HTTP call to the agent
       process, same seam as chat — do not reimplement cron scheduling logic in Go).
+      Partial: `internal/crons` now reads file-backed `jobs.json`/output safely because the current
+      agent exposes no cron HTTP mutation endpoints; scheduler mutations remain proxy-backed.
 - [ ] `GET /api/crons`, `/api/crons/output`, `POST /api/crons/run|pause|resume|create`.
+      Partial: GET list/output are native and live-verified (12 jobs from real `~/.hermes/cron/jobs.json`);
+      POST mutations remain proxy-backed until an agent-side scheduler seam exists.
+      Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`.
 - [ ] `internal/skillsmem`: read `SKILL.md` files / skill registry, `MEMORY.md`/`USER.md`/`SOUL.md`.
 - [ ] `GET /api/skills`, `/api/skills/content`, `/api/memory`.
 - [ ] Remove proxy fallback once green.
