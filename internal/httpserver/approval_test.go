@@ -23,7 +23,10 @@ func TestApprovalRespondInvalidChoice(t *testing.T) {
 	ts := httptest.NewServer(newApprovalRouter(approval.NewStore()))
 	defer ts.Close()
 
-	resp, _ := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"session_id":"appr1","choice":"INVALID"}`))
+	resp, err := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"session_id":"appr1","choice":"INVALID"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid choice status = %d", resp.StatusCode)
@@ -34,7 +37,10 @@ func TestApprovalRespondMissingSession(t *testing.T) {
 	ts := httptest.NewServer(newApprovalRouter(approval.NewStore()))
 	defer ts.Close()
 
-	resp, _ := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"choice":"deny"}`))
+	resp, err := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"choice":"deny"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing session status = %d", resp.StatusCode)
@@ -48,7 +54,10 @@ func TestApprovalSubmitThenRespond(t *testing.T) {
 	defer ts.Close()
 
 	// pending returns the submitted entry (head of queue)
-	resp, _ := http.Get(ts.URL + "/api/approval/pending?session_id=appr2")
+	resp, err := http.Get(ts.URL + "/api/approval/pending?session_id=appr2")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pending status = %d", resp.StatusCode)
@@ -68,7 +77,10 @@ func TestApprovalSubmitThenRespond(t *testing.T) {
 	}
 
 	// respond "session" approves all pattern_keys and clears the queue
-	resp2, _ := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"session_id":"appr2","choice":"session"}`))
+	resp2, err := http.Post(ts.URL+"/api/approval/respond", "application/json", bytes.NewBufferString(`{"session_id":"appr2","choice":"session"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("respond status = %d", resp2.StatusCode)
@@ -86,13 +98,18 @@ func TestApprovalSubmitThenRespond(t *testing.T) {
 	if !s.IsApproved("appr2", "rm") {
 		t.Fatal("pattern_key not approved")
 	}
-	resp3, _ := http.Get(ts.URL + "/api/approval/pending?session_id=appr2")
+	resp3, err := http.Get(ts.URL + "/api/approval/pending?session_id=appr2")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp3.Body.Close()
 	var body3 struct {
 		Pending      map[string]any `json:"pending"`
 		PendingCount int            `json:"pending_count"`
 	}
-	json.NewDecoder(resp3.Body).Decode(&body3)
+	if err := json.NewDecoder(resp3.Body).Decode(&body3); err != nil {
+		t.Fatal(err)
+	}
 	if body3.Pending != nil || body3.PendingCount != 0 {
 		t.Fatalf("pending not cleared: %+v", body3)
 	}
