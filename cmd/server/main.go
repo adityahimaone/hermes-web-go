@@ -45,6 +45,14 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 			db = opened
 			defer db.Close()
 
+			// Carry Python's command_allowlist into Go's durable approval store.
+			// Import is additive and fail-closed: malformed/unreadable config is
+			// logged, never treated as approval.
+			allowlistPath := filepath.Join(filepath.Dir(cfg.DataRoot), "config.yaml")
+			if err := approval.ImportPythonAllowlist(db, allowlistPath); err != nil {
+				log.Printf("approval: allowlist import: %v", err)
+			}
+
 			// Import from Hermes state.db (primary source of truth).
 			stateCount, stateErr := importFromStateDB(db, cfg.StateDBPath)
 			if stateErr != nil {

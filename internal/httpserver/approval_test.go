@@ -19,6 +19,47 @@ func newApprovalRouter(st *approval.Store) http.Handler {
 	return r
 }
 
+func TestApprovalRouteNativeNotProxied(t *testing.T) {
+	// A proxy catch-all would 404 a path it doesn't recognize as native. If
+	// approval is served by Go, /api/approval/pending must answer 200 (with a
+	// valid session_id) even though a proxy handler is registered.
+	st := approval.NewStore()
+	st.Submit(approval.PendingApproval{ID: "p1", SessionID: "nat", Command: "ls", PatternKeys: []string{"ls"}})
+	r := NewRouterWithAgent("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}), nil, "", fakeClientNoop{}, st)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+	resp, err := ts.Client().Get(ts.URL + "/api/approval/pending?session_id=nat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approval pending status = %d, want 200 (native, not proxied)", resp.StatusCode)
+	}
+}
+
+func TestCronsRouteNativeNotProxied(t *testing.T) {
+	st := approval.NewStore()
+	r := NewRouterWithAgent("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}), nil, "", fakeClientNoop{}, st)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+	resp, err := ts.Client().Get(ts.URL + "/api/crons")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// /api/crons is native (file-backed); without a proxy, a non-native route
+	// would 404. Crons lists from Hermes home — just assert it's handled, not
+	// proxied, by the 200-vs-404 distinction with both registered.
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatalf("crons proxied/404, want native handling")
+	}
+}
+
 func TestApprovalRespondInvalidChoice(t *testing.T) {
 	ts := httptest.NewServer(newApprovalRouter(approval.NewStore()))
 	defer ts.Close()

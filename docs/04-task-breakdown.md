@@ -148,16 +148,18 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       turn relay in `internal/httpserver/chat.go` submits `EventApproval` to the shared
       `approval.Store` before forwarding to the stream; `TestChatStartApprovalEventPopulatesStore`
       proves both SSE delivery and store population.
-- [ ] Permanent-allowlist persistence (SQLite instead of Python's flat file) + import any existing
-      allowlist during the Phase 2 importer (retroactively, or as an add-on migration step here).
-      Evidence: `internal/approval/persist.go` (settings-table JSON union) +
-      `TestStorePersistsPermanentToDB`, `TestStoreLoadsPermanentsOnBoot`,
-      `TestSQLitePersistenceRoundTrip`; wired in `cmd/server/main.go` via `NewStoreP`.
-      Python allowlist-file import remains open (only SQLite storage verified live so far).
+- [x] Permanent-allowlist persistence: SQLite settings-table JSON union via `internal/approval/persist.go`.
+      `ImportPythonAllowlist` reads legacy `~/.hermes/config.yaml` `command_allowlist` entries at
+      startup, additive and fail-closed. Evidence: `TestImportPythonAllowlist`,
+      `TestImportPythonAllowlistMissingIsNoop`, live import verified 21 keys from current config.
+      `TestStorePersistsPermanentToDB`, `TestStoreLoadsPermanentsOnBoot`, and
+      `TestSQLitePersistenceRoundTrip` cover SQLite persistence; wired in `cmd/server/main.go`.
 - [x] Rule #9 test: multi-pattern approval, assert all `pattern_keys` get approved, not just the
       first. Evidence: `TestApprovalStoreAlwaysPersistsAllPatternKeys` (always) and
       `TestApprovalStoreQueueAndChoices` (session) iterate `PatternKeys`.
-- [ ] Remove proxy fallback for approval routes once green.
+- [x] Approval routes are native and no longer proxy-backed when `NewRouterWithAgent` is used.
+      Evidence: `TestApprovalRouteNativeNotProxied`. Legacy data-only router intentionally keeps
+      proxy fallback because it has no approval store.
 
 ## Phase 6 — Panels (crons, skills, memory)
 
