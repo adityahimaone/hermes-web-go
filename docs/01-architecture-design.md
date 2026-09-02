@@ -1,5 +1,9 @@
 # 01 — Architecture & Design
 
+## Phase 0 chat decision
+
+Fork default chat is **in-process**: `api.agent_runtime` lazily loads `run_agent.AIAgent`, and `/api/chat` plus `/api/chat/start` execute agent inside WebUI process. Source `README.md` documents chat migration scope but does not document `HERMES_WEBUI_CHAT_BACKEND=gateway`; gateway mode is described in this design as a proposed/conditional integration. Phase 4 must retain an **agent shim** fallback for parity unless deployment explicitly enables and validates gateway mode. Go must not assume `HERMES_API_URL` alone provides current WebUI agent contract.
+
 ## 1. Package layout
 
 ```
@@ -249,7 +253,8 @@ Port every env var from the Python `ARCHITECTURE.md` §3 table with the same nam
 consumed only by `internal/proxy` and deleted along with that package in Phase 8. Also add
 `HERMES_WEBUI_AGENT_TRANSPORT` (`auto`|`grpc`|`http`, default `auto`) and
 `HERMES_WEBUI_AGENT_SOCKET` (default `~/.hermes/webui/agent.sock`) per §2b — both are optional;
-omitting them preserves the original HTTP-gateway-only behavior exactly.
+omitting them preserves the selected in-process `AIAgent` decision and does not imply gateway-only
+behavior; provider traffic remains outside Phase 0 evidence.
 
 ## 9. Logging & observability
 

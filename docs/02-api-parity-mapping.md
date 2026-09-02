@@ -4,7 +4,7 @@ This is the authoritative "must reproduce exactly" list. Treat it like the origi
 own `ARCHITECTURE.md` §18 (Endpoint Reference): **living document, update it the moment you
 learn your fork differs from what's below.** Everything here was reconstructed from the public
 architecture documentation of the upstream project this fork is based on — verify each row
-against the actual Hermes WebUI fork source before marking it done, since a
+against the actual `adityahimaone/hermes-webui-personal` source before marking it done, since a
 personal fork (kanban gates, remote SSH, evomem tweaks) has diverged from upstream.
 
 ## 0. First task of Phase 0
@@ -143,7 +143,9 @@ project_id   *string
 
 ## 9. Fork-specific features to inventory in Phase 0 (not in the upstream doc, must be reverse-engineered from the actual repo)
 
-- Kanban board / gates (per memory: "kanban gates" mentioned as a personal-fork feature).
+- Kanban board / task-dispatch system — **now specified in detail in `08-kanban-board.md`**
+  (data model, dispatcher semantics, endpoint hypotheses) based on a UI screenshot review; still
+  needs Phase 0 source verification, but is no longer just a placeholder bullet.
 - Remote SSH space support.
 - "evomem" tweaks (memory system changes vs. upstream `MEMORY.md`/`USER.md`/`SOUL.md` handling).
 

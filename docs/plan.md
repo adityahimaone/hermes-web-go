@@ -18,6 +18,7 @@ This file is the entry point. Detailed instructions live alongside this file:
 | [`05-migration-strategy.md`](05-migration-strategy.md) | How to run Go + Python side-by-side safely (strangler-fig proxy), rollback plan |
 | [`06-testing-and-parity.md`](06-testing-and-parity.md) | How we prove 1:1 parity before flipping traffic, regression gates |
 | [`07-future-vite-frontend.md`](07-future-vite-frontend.md) | Deferred: frontend rewrite to Vite, only after backend is 100% Go |
+| [`08-kanban-board.md`](08-kanban-board.md) | Kanban/task-dispatch board — data model, dispatcher semantics, its own phase |
 
 ---
 
@@ -42,10 +43,9 @@ The one piece that *cannot* be trivially ported line-for-line: the Python backen
 That is Python application code (tool loop, LLM calls, memory, skills), not just an HTTP handler —
 rewriting it in Go would mean re-implementing the entire Hermes agent, which is out of scope and
 not what "lightweight web UI rewrite" means. Decision (detailed in `01-architecture-design.md`):
-the Go server does **not** re-implement the agent. It talks to the existing Hermes agent process
-over HTTP, the same way the project already supports today (`HERMES_WEBUI_CHAT_BACKEND=gateway`,
-9router as an OpenAI-compatible provider on `127.0.0.1:8642`). This is a supported mode already,
-not a new invention — it just becomes the *only* mode instead of an alternate one.
+the Go server does **not** re-implement the agent. It calls the in-process `AIAgent` decision seam
+   defined in `01-architecture-design.md` §2b. Agent transport is internal implementation detail;
+   Phase 0 evidence does not include provider traffic and makes no gateway-only claim.
 
 ## 2. Non-negotiable outcomes (1:1 parity checklist, summarized)
 
@@ -69,6 +69,9 @@ Full detail in `02-api-parity-mapping.md`. At a glance, the Go backend must repr
 - [ ] Same static file layout served from the same paths (`static/index.html`, `style.css`,
       `ui.js`, `workspace.js`, `sessions.js`, `messages.js`, `panels.js`, `commands.js`, `boot.js`) —
       Go changes **nothing** here in phase 1–6; it just serves the files.
+- [ ] The Kanban/task-dispatch board (boards, swimlanes-by-assignee, status columns, dispatcher
+      preview/run, bulk actions, archive, multi-tenant filtering) — a major module in its own
+      right, detailed in `docs/08-kanban-board.md`, not an afterthought under "panels".
 
 ## 3. High-level target shape (see `01-architecture-design.md` for full detail)
 
@@ -106,16 +109,23 @@ Browser ── HTTP/SSE ──▶  Go server (public port, e.g. 8787)
 
 | Phase | Name | Exit criteria |
 |---|---|---|
-| 0 | Audit & harness | Full endpoint/behavior inventory frozen (doc 02); parity test harness runs against the *existing* Python server and passes, proving the harness itself is trustworthy before any Go code exists |
+| 0 | Audit & harness | **Open/blocking:** endpoint/behavior inventory and harness are prepared, but Phase 0 cannot close until real supervised traffic creates and replays a golden fixture against disposable state |
 | 1 | Skeleton + proxy | Go binary boots, serves `static/`, proxies 100% of `/api/*` to Python untouched; this is the cutover of the *public port* with zero behavior change |
 | 2 | Read-only data ports | Sessions (list/get/search), workspaces, files (list/read/raw), health — Go-native, Python proxy removed for these routes only |
 | 3 | Mutations | Session CRUD, uploads, file ops (create/save/delete), workspace add/remove/rename |
 | 4 | Chat + streaming | `/api/chat/start`, `/api/chat/stream`, `/api/chat` fallback — Go owns HTTP/SSE plumbing, delegates actual generation to the Hermes agent gateway |
 | 5 | Approvals | Full approval state machine in Go (replaces Python's module-level `_pending` dict) |
 | 6 | Panels | Crons, skills, memory (read + cron run/pause/resume/create) |
+| 6.5 | Kanban board | Task-dispatch board fully ported — see `docs/08-kanban-board.md`; own data model, dispatcher, wired into `agentclient` + approvals |
 | 7 | Auth + observability | Password auth, structured logging, `/health` parity, graceful shutdown |
 | 8 | Full cutover | Python process no longer started at all; Go is 100% of the backend; proxy code deleted |
 | 9 (future) | Frontend → Vite | Only starts after Phase 8 sign-off; see `07-future-vite-frontend.md` |
+
+## Phase 0 status (2026-09-02)
+
+Phase 0 bounded lifecycle evidence (2026-09-02): fresh A/B run against unmodified source passed exactly 3 GET exchanges covering `/health`, `/api/sessions`, and `/api/workspaces`, with isolated state and workspace substitution. This 3-GET route set captures no session ID, so no ID remapping was exercised. Provider chat was excluded because safe repeatability was not established. Phase 0 provider-chat coverage remains open; no provider output is fabricated or claimed.
+
+Comparative audit: `hermes-web-studio` was reviewed read-only. Its Go `Handler` routes and gateway implementation differ from primary source `hermes-webui-personal/api/routes.py`; no comparative routes were merged into the primary inventory.
 
 ## 5. How to use this plan day-to-day
 
