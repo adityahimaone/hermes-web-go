@@ -82,18 +82,26 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ### 4a. Ship the safe path first (as originally planned — no transport risk here)
 
-- [ ] `internal/agentclient`: define the `AgentClient` interface (`RunTurn`, `Cancel`) and the
-      shared `TurnEvent` type per `01-architecture-design.md` §2b.
-- [ ] Implement `httpClient` (plain HTTP to the existing gateway / 9router, or the Phase-0-decided
-      shim). Confirm the `task_id` keyword-equivalent contract end-to-end.
-- [ ] `internal/stream`: stream registry (`sync.Map` or mutex+map), per-stream `chan streamEvent`,
-      30s heartbeat, event types `token`/`tool`/`approval`/`done`/`error`.
-- [ ] `POST /api/chat/start` — validates session, saves user message, spawns goroutine, returns
-      `{stream_id, session_id}` immediately.
+- [x] `internal/agentclient`: define the `AgentClient` interface (`RunTurn`, `Cancel`) and the
+      shared `TurnEvent` type per `01-architecture-design.md` §2b. Evidence: `internal/agentclient/agentclient_test.go`,
+      commit `7c837c9`; `go test ./... -race` passed.
+- [x] Implement `httpClient` (plain HTTP to the existing gateway / 9router, or the Phase-0-decided
+      shim). Confirm the `task_id` keyword-equivalent contract end-to-end. Evidence: runner client
+      POST `/v1/runs`, GET `/v1/runs/{id}/events`, POST cancel; `httpclient_test.go`; commit `7c837c9`.
+- [x] `internal/stream`: stream registry (`sync.Map` or mutex+map), per-stream `chan streamEvent`,
+      30s heartbeat, event types `token`/`tool`/`approval`/`done`/`error`. Evidence: `registry_test.go`,
+      `writer_test.go`; race-clean.
+- [x] `POST /api/chat/start` — validates session, saves user message, spawns goroutine, returns
+      `{stream_id, session_id}` immediately. Evidence: `TestChatStartStreamsTokenAndDone`,
+      `TestChatStartValidatesSession`; commit `ec72c10`.
 - [ ] `GET /api/chat/stream` — SSE writer, forwards channel events, handles disconnect cleanly
       (check `r.Context().Done()`), cleans up the stream registry entry in a deferred func.
-- [ ] `GET /api/chat/stream/status` — reconnect-banner support.
-- [ ] `POST /api/chat` — synchronous fallback (blocks until the goroutine completes).
+      Implemented and covered for event forwarding, but disconnect cleanup still needs a dedicated
+      context-cancellation test before checkbox close.
+- [x] `GET /api/chat/stream/status` — reconnect-banner support. Evidence: `TestChatStartStreamsTokenAndDone`
+      confirms inactive status after completed stream; commit `ec72c10`.
+- [ ] `POST /api/chat` — synchronous fallback (blocks until the goroutine completes). Route exists,
+      but current implementation only persists and returns; blocking agent execution remains open.
 - [ ] Concurrency test: fire two concurrent chats in two different sessions, assert no
       cross-contamination (this is the test that proves the Phase-6-of-Python-doc TD1 fix is real
       in Go, per `01-architecture-design.md` §6).
