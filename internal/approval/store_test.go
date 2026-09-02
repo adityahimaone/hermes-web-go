@@ -41,6 +41,38 @@ func TestApprovalStoreAlwaysPersistsAllPatternKeys(t *testing.T) {
 	}
 }
 
+func TestApprovalStoreMintsIDOnSubmit(t *testing.T) {
+	s := NewStore()
+	entry := PendingApproval{SessionID: "s4", Command: "ls"}
+	if !s.Submit(entry) {
+		t.Fatal("submit rejected")
+	}
+	pending, ok := s.Pending("s4")
+	if !ok {
+		t.Fatal("not pending")
+	}
+	if pending.ID == "" {
+		t.Fatal("ID not minted")
+	}
+	if pending.Command != "ls" {
+		t.Fatalf("command = %q", pending.Command)
+	}
+}
+
+func TestApprovalFromEvent(t *testing.T) {
+	entry := FromEvent("s5", map[string]any{
+		"command":      "bash -c 'curl x'",
+		"description":  "Run curl",
+		"pattern_keys": []any{"curl", "bash"},
+	})
+	if entry.SessionID != "s5" || entry.Command != "bash -c 'curl x'" || len(entry.PatternKeys) != 2 {
+		t.Fatalf("from event = %+v", entry)
+	}
+	if entry.PatternKeys[0] != "curl" || entry.PatternKeys[1] != "bash" {
+		t.Fatalf("pattern keys = %v", entry.PatternKeys)
+	}
+}
+
 func TestApprovalStoreRejectsInvalidChoice(t *testing.T) {
 	s := NewStore()
 	s.Submit(PendingApproval{ID: "a3", SessionID: "s3"})

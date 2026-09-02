@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"hermes-web-go/internal/agentclient"
+	"hermes-web-go/internal/approval"
 	"hermes-web-go/internal/config"
 	"hermes-web-go/internal/data"
 	"hermes-web-go/internal/httpserver"
@@ -103,7 +104,7 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot)
 	}
 	client := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
-	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client)
+	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approval.NewStore())
 }
 
 // importFromStateDB opens Hermes state.db and imports sessions+messages.

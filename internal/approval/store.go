@@ -5,6 +5,8 @@
 package approval
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 )
 
@@ -26,6 +28,14 @@ type Store struct {
 	permanent map[string]bool              // pattern_key -> true (always scope)
 }
 
+func newID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
 // NewStore creates an empty approval store.
 func NewStore() *Store {
 	return &Store{
@@ -35,9 +45,13 @@ func NewStore() *Store {
 	}
 }
 
-// Submit appends a pending approval to the session's queue. Returns false if
-// an entry with the same ID is already pending.
+// Submit appends a pending approval to the session's queue. A missing ID is
+// minted as a fresh uuid4 hex so /respond can target it. Returns false if an
+// entry with the same ID is already pending.
 func (s *Store) Submit(entry PendingApproval) bool {
+	if entry.ID == "" {
+		entry.ID = newID()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.pending[entry.SessionID] {

@@ -26,7 +26,7 @@ func NewRouter(staticDir string, proxyHandler http.Handler) http.Handler {
 // NewRouterWithAgent adds native chat routes to the data-enabled router.
 // Callers pass the agent transport explicitly so tests can use a deterministic
 // fake and production can select the configured runner client.
-func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, client agentclient.AgentClient) http.Handler {
+func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, client agentclient.AgentClient, st *approval.Store) http.Handler {
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
@@ -37,8 +37,10 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	if db != nil {
 		DataRouter(r, db, dataRoot)
 	}
-	ChatRouter(r, db, stream.NewRegistry(), client)
-	ApprovalRouter(r, approval.NewStore())
+	ChatRouter(r, db, stream.NewRegistry(), client, st)
+	if st != nil {
+		ApprovalRouter(r, st)
+	}
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r
 }

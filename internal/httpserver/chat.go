@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"hermes-web-go/internal/agentclient"
+	"hermes-web-go/internal/approval"
 	"hermes-web-go/internal/store"
 	"hermes-web-go/internal/stream"
 )
@@ -18,7 +19,7 @@ import (
 // (db) and the agent transport (client). When client is nil the routes are
 // not registered, so the catch-all proxy can keep serving them (Phase 4
 // cutover keeps proxy fallback until the runner is verified live).
-func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclient.AgentClient) {
+func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclient.AgentClient, st *approval.Store) {
 	if db == nil || reg == nil || client == nil {
 		return
 	}
@@ -110,6 +111,10 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 						case <-ctx.Done():
 						}
 						return
+					}
+					if ev.Type == agentclient.EventApproval && st != nil {
+						entry := approval.FromEvent(sessionID, ev.Data)
+						st.Submit(entry)
 					}
 					select {
 					case ch <- ev:

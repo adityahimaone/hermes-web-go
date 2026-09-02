@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hermes-web-go/internal/agentclient"
+	"hermes-web-go/internal/approval"
 	"hermes-web-go/internal/store"
 )
 
@@ -62,7 +63,7 @@ func TestChatStartStreamsTokenAndDone(t *testing.T) {
 			{Type: agentclient.EventDone},
 		},
 	}
-	r := NewRouterWithAgent("", nil, db, "", fake)
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
@@ -158,7 +159,7 @@ func TestChatTurnSurvivesStartRequest(t *testing.T) {
 		cancelled: make(chan struct{}),
 		finished:  make(chan struct{}),
 	}
-	r := NewRouterWithAgent("", nil, db, "", hang)
+	r := NewRouterWithAgent("", nil, db, "", hang, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
@@ -222,7 +223,7 @@ func (h *hangClient) Cancel(ctx context.Context, sessionID string) error {
 func TestChatStartValidatesSession(t *testing.T) {
 	db := testDB(t)
 	fake := &fakeClient{started: make(chan TurnRequestCapture, 1)}
-	r := NewRouterWithAgent("", nil, db, "", fake)
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
@@ -243,7 +244,7 @@ func TestChatSyncBlocksUntilAgentCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := &blockingClient{started: make(chan struct{}), release: make(chan struct{})}
-	r := NewRouterWithAgent("", nil, db, "", fake)
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
@@ -317,7 +318,7 @@ func TestChatConcurrentSessionsNoCrossContamination(t *testing.T) {
 		"concB": {{Type: agentclient.EventToken, Text: "bravo"}, {Type: agentclient.EventDone}},
 	}
 	fake := &mapClient{perSess: perSess, started: make(chan TurnRequestCapture, 4)}
-	r := NewRouterWithAgent("", nil, db, "", fake)
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
@@ -399,10 +400,68 @@ func (m *mapClient) RunTurn(ctx context.Context, req agentclient.TurnRequest) (<
 }
 func (m *mapClient) Cancel(ctx context.Context, sessionID string) error { return nil }
 
+func TestChatStartApprovalEventPopulatesStore(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{ID: "appr9", Title: "", Workspace: "/tmp", Model: "codex", Messages: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	st := approval.NewStore()
+	fake := &fakeClient{
+		started: make(chan TurnRequestCapture, 1),
+		events: []agentclient.TurnEvent{
+			{Type: agentclient.EventApproval, Data: map[string]any{
+				"command":      "rm -rf x",
+				"description":  "Delete x",
+				"pattern_keys": []any{"rm", "delete"},
+			}},
+			{Type: agentclient.EventDone},
+		},
+	}
+	r := NewRouterWithAgent("", nil, db, "", fake, st)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", bytes.NewBufferString(`{"session_id":"appr9","message":"go"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var startResp struct {
+		StreamID  string `json:"stream_id"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&startResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// stream must carry the approval event
+	sresp, err := http.Get(ts.URL + "/api/chat/stream?stream_id=" + startResp.StreamID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := io.ReadAll(sresp.Body)
+	sresp.Body.Close()
+	if !strings.Contains(string(out), "event: approval") || !strings.Contains(string(out), `"command":"rm -rf x"`) {
+		t.Fatalf("stream missing approval event: %q", string(out))
+	}
+
+	// store must have the pending entry
+	entry, ok := st.Pending("appr9")
+	if !ok {
+		t.Fatal("approval store missing pending entry")
+	}
+	if entry.Command != "rm -rf x" || len(entry.PatternKeys) != 2 {
+		t.Fatalf("pending entry = %+v", entry)
+	}
+	if entry.ID == "" {
+		t.Fatal("approval_id not minted")
+	}
+}
+
 func TestChatStreamNotFound(t *testing.T) {
 	db := testDB(t)
 	fake := &fakeClient{started: make(chan TurnRequestCapture, 1)}
-	r := NewRouterWithAgent("", nil, db, "", fake)
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
