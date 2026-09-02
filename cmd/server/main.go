@@ -15,6 +15,7 @@ import (
 
 	"hermes-web-go/internal/agentclient"
 	"hermes-web-go/internal/approval"
+	"hermes-web-go/internal/auth"
 	"hermes-web-go/internal/config"
 	"hermes-web-go/internal/data"
 	"hermes-web-go/internal/httpserver"
@@ -100,12 +101,24 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 // the HTTP runner client; otherwise the proxy catch-all keeps serving chat
 // (Phase 4 cutover keeps proxy fallback until the runner is verified live).
 func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http.Handler {
+	opts := []httpserver.RouterOption{}
+	if cfg.Password != "" {
+		a, err := auth.New(auth.Config{
+			Password: cfg.Password,
+			StateDir: cfg.DataRoot,
+		})
+		if err != nil {
+			log.Printf("auth: disabled (%v)", err)
+		} else {
+			opts = append(opts, httpserver.WithAuth(a))
+		}
+	}
 	if cfg.AgentBaseURL == "" {
-		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot)
+		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, opts...)
 	}
 	client := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
 	approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
-	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore)
+	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore, opts...)
 }
 
 // importFromStateDB opens Hermes state.db and imports sessions+messages.

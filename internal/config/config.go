@@ -21,6 +21,7 @@ type Config struct {
 	AgentSocket    string
 	AgentBaseURL   string
 	AgentAPIKey    string
+	Password       string
 }
 
 // Load reads configuration via getenv. An empty value falls back to the default.
@@ -36,6 +37,7 @@ func Load(getenv func(string) string) (Config, error) {
 		AgentSocket:    getenv("HERMES_WEBUI_AGENT_SOCKET"),
 		AgentBaseURL:   getenv("HERMES_WEBUI_RUNNER_BASE_URL"),
 		AgentAPIKey:    getenv("HERMES_WEBUI_RUNNER_API_KEY"),
+		Password:       getenv("HERMES_WEBUI_PASSWORD"),
 	}
 	if c.Host == "" {
 		c.Host = "127.0.0.1"

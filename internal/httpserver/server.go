@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"hermes-web-go/internal/agentclient"
 	"hermes-web-go/internal/approval"
+	"hermes-web-go/internal/auth"
 	"hermes-web-go/internal/proxy"
 	"hermes-web-go/internal/stream"
 )
@@ -19,6 +21,7 @@ import (
 // routerOpt is a functional option for NewRouterWithAgent.
 type routerOpt struct {
 	hermesHome string
+	auth       *auth.Auth
 }
 
 // RouterOption mutates router construction options.
@@ -28,6 +31,19 @@ type RouterOption func(*routerOpt)
 // file state. Defaults to $HOME/.hermes when unset.
 func WithHermesHome(home string) RouterOption {
 	return func(o *routerOpt) { o.hermesHome = home }
+}
+
+// WithAuth enables the optional password gate. When nil (default) the gate
+// is off and every route is public.
+func WithAuth(a *auth.Auth) RouterOption {
+	return func(o *routerOpt) { o.auth = a }
+}
+
+func authMiddlewareOrNil(o routerOpt) func(http.Handler) http.Handler {
+	if o.auth == nil {
+		return nil
+	}
+	return o.auth.Middleware
 }
 
 func defaultHermesHome() string {
@@ -48,7 +64,30 @@ func routerHermesHome(o routerOpt) string {
 	return defaultHermesHome()
 }
 
-// NewRouter builds the full HTTP handler: recovery + logging middleware,
+// Health carries the state needed to answer /health.
+type Health struct {
+	reg       *stream.Registry
+	startedAt time.Time
+}
+
+func NewHealth(reg *stream.Registry, startedAt time.Time) *Health {
+	return &Health{reg: reg, startedAt: startedAt}
+}
+
+func (h *Health) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	active := 0
+	if h.reg != nil {
+		active = h.reg.Len()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":         "ok",
+		"active_streams": active,
+		"uptime_seconds": int64(time.Since(h.startedAt).Seconds()),
+	})
+}
+
+// Router constructors below.
 // native /health, byte-identical static serving under /static/*, and a
 // catch-all that proxies every non-native route to the legacy backend.
 // A nil proxyHandler leaves non-native routes as 404.
@@ -64,24 +103,29 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	for _, fn := range opts {
 		fn(&o)
 	}
+	reg := stream.NewRegistry()
 
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sessions": 0})
-	})
+	if mw := authMiddlewareOrNil(o); mw != nil {
+		r.Use(mw)
+	}
+	r.Get("/health", NewHealth(reg, time.Now()).ServeHTTP)
 	if db != nil {
 		DataRouter(r, db, dataRoot)
 	}
-	ChatRouter(r, db, stream.NewRegistry(), client, st)
+	ChatRouter(r, db, reg, client, st)
 	if st != nil {
 		ApprovalRouter(r, st)
 	}
 	CronsRouter(r, routerHermesHome(o))
 	SkillsMemRouter(r, routerHermesHome(o))
-	mountStaticAndProxy(r, staticDir, proxyHandler)
+	if o.auth != nil {
+		AuthRouter(r, o.auth)
+	}
+	mountStaticAndProxy(r, staticDir, proxyHandler, false)
+
 	return r
 }
 
@@ -95,11 +139,12 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
+	if mw := authMiddlewareOrNil(o); mw != nil {
+		r.Use(mw)
+	}
 
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sessions": 0})
-	})
+	reg := stream.NewRegistry()
+	r.Get("/health", NewHealth(reg, time.Now()).ServeHTTP)
 
 	// Phase 2 read-only data routes are native when the DB is present.
 	if db != nil {
@@ -108,15 +153,20 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 
 	CronsRouter(r, routerHermesHome(o))
 	SkillsMemRouter(r, routerHermesHome(o))
+	if o.auth != nil {
+		AuthRouter(r, o.auth)
+	}
 
-	mountStaticAndProxy(r, staticDir, proxyHandler)
+	mountStaticAndProxy(r, staticDir, proxyHandler, true)
 	return r
 }
 
 // mountStaticAndProxy attaches the static file server, app shell routes, and
 // the catch-all proxy handler to r. This is shared by NewRouterWithData and
-// NewRouterWithAgent so both serve the same static content.
-func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handler) {
+// NewRouterWithAgent so both serve the same static content. allowChatProxy
+// controls whether the catch-all may still forward /api/chat* to the legacy
+// backend (data-only routers have no native chat handler and must proxy).
+func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handler, allowChatProxy bool) {
 	r.Handle("/static", http.RedirectHandler("/static/", http.StatusMovedPermanently))
 
 	// Serve the copied frontend byte-identically. Unlike the stdlib FileServer
@@ -151,6 +201,10 @@ func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handl
 	r.Get("/share/{id}", serveShell)
 
 	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		if !allowChatProxy && (r.URL.Path == "/api/chat" || strings.HasPrefix(r.URL.Path, "/api/chat/")) {
+			http.NotFound(w, r)
+			return
+		}
 		if proxy.IsNative(r.URL.Path) {
 			http.NotFound(w, r)
 			return

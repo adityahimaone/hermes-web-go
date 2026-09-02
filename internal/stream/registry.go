@@ -109,3 +109,25 @@ func (r *Registry) Delete(id string) bool {
 	r.mu.Unlock()
 	return true
 }
+
+// Len reports the number of active (not-yet-closed) streams.
+func (r *Registry) Len() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for id := range r.m {
+		if !r.closed[id] {
+			n++
+		}
+	}
+	return n
+}
+
+// CloseAll marks every stream closed so their SSE writers can drain and exit.
+func (r *Registry) CloseAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id := range r.m {
+		r.closed[id] = true
+	}
+}

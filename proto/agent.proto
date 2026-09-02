@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package hermes.agent.v1;
+option go_package = "hermes-web-go/internal/agentpb;agentpb";
+
+service Agent {
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc RunTurn(RunTurnRequest) returns (stream TurnEvent);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+}
+
+message PingRequest {}
+message PingResponse { string version = 1; }
+message RunTurnRequest {
+  string session_id = 1;
+  string task_id = 2;
+  string message = 3;
+  string workspace = 4;
+  string model = 5;
+  string provider = 6;
+  string history_json = 7;
+  repeated string attachments = 8;
+}
+message TurnEvent {
+  string type = 1;
+  string text = 2;
+  string name = 3;
+  string preview = 4;
+  string data_json = 5;
+  string error = 6;
+}
+message CancelRequest { string session_id = 1; }
+message CancelResponse {}
