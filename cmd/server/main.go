@@ -49,6 +49,9 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 			} else if ierr == nil {
 				log.Printf("store: imported %d sessions from %s", n, importDir)
 			}
+			if cerr := data.ImportCatalog(db, dataRoot); cerr != nil {
+				log.Printf("store: import catalog: %v", cerr)
+			}
 		}
 	}
 

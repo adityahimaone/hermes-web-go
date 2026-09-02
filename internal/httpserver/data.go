@@ -219,7 +219,15 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 	})
 
 	r.Get("/api/workspaces", func(w http.ResponseWriter, req *http.Request) {
-		ws := readWorkspaces(dataRoot)
+		rows, err := store.ListWorkspaces(db)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list workspaces")
+			return
+		}
+		ws := make([]map[string]any, 0, len(rows))
+		for _, row := range rows {
+			ws = append(ws, map[string]any{"path": row.Path, "name": row.Name})
+		}
 		last := ""
 		if len(ws) > 0 {
 			if p, ok := ws[0]["path"].(string); ok {
@@ -308,20 +316,6 @@ func searchPreview(messages, q string) string {
 		end = len(messages)
 	}
 	return messages[start:end]
-}
-
-// readWorkspaces loads workspace paths from workspaces.json. It returns the
-// parsed list or an empty slice when the file is absent.
-func readWorkspaces(dataRoot string) []map[string]any {
-	raw, err := workspace.ReadWorkspacesJSON(dataRoot)
-	if err != nil {
-		return []map[string]any{}
-	}
-	var ws []map[string]any
-	if err := json.Unmarshal(raw, &ws); err != nil {
-		return []map[string]any{}
-	}
-	return ws
 }
 
 // dirSignature is a cheap stable signature over the listed entries, mirroring

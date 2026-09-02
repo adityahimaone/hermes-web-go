@@ -68,3 +68,30 @@ func TestNativeReadOnlyDataRoutes(t *testing.T) {
 		t.Fatalf("raw content-type = %q", got)
 	}
 }
+
+func TestNativeWorkspacesFromDB(t *testing.T) {
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(t.TempDir(), "webui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := store.ImportWorkspace(db, store.WorkspaceImport{Path: "/tmp/proj", Name: "Proj"}); err != nil {
+		t.Fatal(err)
+	}
+	proxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	r := NewRouterWithData(fixtureStatic(t), proxy, db, root)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/workspaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"path":"/tmp/proj"`) {
+		t.Fatalf("workspaces = %d %q", resp.StatusCode, body)
+	}
+}
