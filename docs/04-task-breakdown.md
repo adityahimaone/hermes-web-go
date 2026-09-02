@@ -113,26 +113,28 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ### 4b. Add the fast path on top, with zero risk to 4a (follow-up within Phase 4)
 
-- [ ] Hermes-side: add a minimal gRPC server to the agent shim (or confirm the fork's gateway
-      already supports one) exposing the same `RunTurn`/`Cancel` semantics over a Unix domain
-      socket (`~/.hermes/webui/agent.sock` by default).
-- [ ] Go-side: implement `grpcClient` behind the same `AgentClient` interface — must translate its
-      wire events into the identical `TurnEvent` shape `httpClient` already produces.
-- [ ] Implement the boot-time capability probe (short timeout, non-fatal) and per-call fallback
-      to `httpClient` on mid-stream gRPC failure, per `01-architecture-design.md` §2b items 1–2.
-- [ ] Wire `HERMES_WEBUI_AGENT_TRANSPORT` (`auto`|`grpc`|`http`, default `auto`) and
-      `HERMES_WEBUI_AGENT_SOCKET` env vars; confirm omitting both preserves current behavior exactly.
-- [ ] Parity test: replay the Phase 0 golden fixtures through `grpcClient` and assert identical
-      `TurnEvent` sequences to `httpClient`'s — same bar as any other route before it's trusted.
-- [ ] Explicit fallback-injection test: kill/disable the gRPC socket mid-session, assert the next
-      turn transparently falls back to `httpClient` with no error surfaced to the browser and only
-      an info-level log line.
-- [ ] Load/soak `auto` mode for a full day (per `06-testing-and-parity.md` §4) before making `grpc`
-      the assumed default in any deployment docs — `auto` itself never needs to change, only your
-      confidence in it.
-- [ ] Only after this soak: upgrade the Hermes shim on your VPS to the gRPC-capable version. Until
-      that upgrade happens, `auto` mode keeps everyone on `httpClient` automatically — nothing to
-      coordinate, nothing that can break the web UI in the interim.
+- [x] Hermes-side: `gateway/platforms/agent_grpc.py` wraps existing `/v1/runs` HTTP API with
+      Ping/RunTurn/Cancel over `~/.hermes/webui/agent.sock`; event stream maps SSE fields into
+      `TurnEvent`; Cancel maps `session_id -> run_id` to `/v1/runs/{run_id}/stop`.
+- [x] Go-side: `internal/agentclient/grpcclient.go` implements `AgentClient`, translates wire
+      events, and falls back to HTTP when stream establishment fails. Mid-stream failures emit one
+      error event; no unsafe replay of side effects.
+- [x] Boot-time capability probe: 500ms Ping, non-fatal in `auto`, forced failure in `grpc` mode.
+- [x] `HERMES_WEBUI_AGENT_TRANSPORT` (`auto`|`grpc`|`http`, default `auto`) and
+      `HERMES_WEBUI_AGENT_SOCKET` wired; omitted vars preserve HTTP behavior.
+- [x] Four mock transport tests, `go test ./... -race`, `go vet ./...`, and `go build ./...` pass.
+- [x] Hermes installer: `scripts/install-agent-grpc-shim.sh` installs `grpcio`, `grpcio-tools`,
+      `httpx`, generates Python stubs, compiles them, and can register launchd (macOS).
+- [x] Persistent-service smoke check: launchd service `ai.hermes.agent-grpc-shim` running,
+      socket present, real Python Ping returns `hermes-agent-grpc-shim/0.1`; flock rejects a
+      second instance.
+- [ ] Parity test: replay Phase 0 golden fixtures through `grpcClient` and assert identical
+      `TurnEvent` sequences to `httpClient`'s.
+- [ ] Explicit real-shim fallback injection: kill/disable gRPC socket mid-session, assert next
+      turn falls back to `httpClient`.
+- [ ] Load/soak `auto` mode for a full day before making `grpc` the assumed default.
+- [ ] Run one real provider-backed turn with `HERMES_WEBUI_AGENT_TRANSPORT=grpc` after credentials,
+      gateway contract, and safety scope are explicitly approved; do not fabricate this result.
 
 ## Phase 5 — Approvals
 

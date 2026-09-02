@@ -1,6 +1,14 @@
 # Phase 4b — gRPC Fast Path: Blocking & Migration Document
 
-## Status: BLOCKED (Hermes-side gRPC shim doesn't exist)
+## Status: SUPERSEDED — see `docs/09-phase4b-unblock.md` (authoritative)
+
+This note diagnosed the two blockers and remains useful as *context* (why the task
+was blocked, the proto contract, the "who builds what" table). For the actual fix,
+treat **`docs_update/3-sept-2026-part-2/09-phase4b-unblock.md`** (merged into
+`docs/09-phase4b-unblock.md`) as the source of truth. The Go side and the Hermes
+Python shim are both implemented and a persistent macOS launchd service exists
+(`ai.hermes.agent-grpc-shim`). Remaining work is parity testing, real-shim fallback
+injection, and a soak, all tracked in `docs/04-task-breakdown.md` §4b.
 
 Phase 4b (gRPC bidirectional streaming over Unix socket) is a **two-sided feature** — the Go
 side (`hermes-web-go`) and the Python side (`hermes-agent`) must both be built, and the
