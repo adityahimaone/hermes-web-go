@@ -84,6 +84,17 @@ func (r *Registry) Close(id string) bool {
 	return true
 }
 
+// Active reports whether the stream exists and is not yet closed.
+func (r *Registry) Active(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.m[id]
+	if !ok {
+		return false
+	}
+	return !r.closed[id]
+}
+
 // Delete removes the stream entry and its closed marker. Returns false if
 // the stream does not exist.
 func (r *Registry) Delete(id string) bool {

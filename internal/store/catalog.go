@@ -61,9 +61,13 @@ func RemoveWorkspace(db *sql.DB, path string) error {
 // RenameWorkspace updates a registered workspace name.
 func RenameWorkspace(db *sql.DB, path, name string) error {
 	result, err := db.Exec(`UPDATE workspaces SET name=? WHERE path=?`, name, path)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	n, _ := result.RowsAffected()
-	if n == 0 { return sql.ErrNoRows }
+	if n == 0 {
+		return sql.ErrNoRows
+	}
 	return nil
 }
 
