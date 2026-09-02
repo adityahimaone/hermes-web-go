@@ -116,7 +116,21 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 	if cfg.AgentBaseURL == "" {
 		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, opts...)
 	}
-	client := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
+	httpFallback := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
+	mode := agentclient.TransportMode(cfg.AgentTransport)
+	if mode == "" {
+		mode = agentclient.TransportAuto
+	}
+	socket := cfg.AgentSocket
+	if socket == "" {
+		socket = filepath.Join(cfg.DataRoot, "agent.sock")
+	}
+	client, err := agentclient.NewBestClient(context.Background(), agentclient.TransportConfig{
+		Mode: mode, SocketPath: socket,
+	}, httpFallback)
+	if err != nil {
+		return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, httpFallback, approval.NewStoreP(approval.NewSQLitePersistence(db)), opts...)
+	}
 	approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
 	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore, opts...)
 }
