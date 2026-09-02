@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"hermes-web-go/internal/agentclient"
+	"hermes-web-go/internal/approval"
 	"hermes-web-go/internal/proxy"
 	"hermes-web-go/internal/stream"
 )
@@ -37,6 +38,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 		DataRouter(r, db, dataRoot)
 	}
 	ChatRouter(r, db, stream.NewRegistry(), client)
+	ApprovalRouter(r, approval.NewStore())
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r
 }
