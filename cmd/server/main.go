@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"hermes-web-go/internal/config"
+	"hermes-web-go/internal/data"
 	"hermes-web-go/internal/httpserver"
 	"hermes-web-go/internal/proxy"
+	"hermes-web-go/internal/store"
 )
 
 // run builds the server from cfg, binds it, and services requests until stop
@@ -28,9 +32,29 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 		proxyHandler = ph
 	}
 
+	var db *sql.DB
+	dataRoot := cfg.DataRoot
+	dbPath := cfg.DatabasePath
+	if dbPath != "" {
+		opened, err := store.Open(dbPath)
+		if err != nil {
+			log.Printf("store: open %s: %v (data routes disabled)", dbPath, err)
+		} else {
+			db = opened
+			defer db.Close()
+			importDir := filepath.Join(dataRoot, "sessions")
+			n, ierr := data.ImportSessions(db, importDir)
+			if ierr != nil && !errors.Is(ierr, os.ErrNotExist) {
+				log.Printf("store: import %s: %v", importDir, ierr)
+			} else if ierr == nil {
+				log.Printf("store: imported %d sessions from %s", n, importDir)
+			}
+		}
+	}
+
 	srv := &http.Server{
 		Addr:    cfg.Host + ":" + strconv.Itoa(cfg.Port),
-		Handler: httpserver.NewRouter(cfg.StaticDir, proxyHandler),
+		Handler: httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, dataRoot),
 	}
 
 	errCh := make(chan error, 1)

@@ -54,11 +54,11 @@ func TestProxyWiring(t *testing.T) {
 		t.Fatalf("static mismatch: %d", resp.StatusCode)
 	}
 
-	// proxied
-	resp, _ = http.Get(ts.URL + "/api/sessions")
+	// proxied: a non-data route still falls through to the backend
+	resp, _ = http.Get(ts.URL + "/api/chat/start")
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 202 || string(body) != `{"proxied":/api/sessions}` {
+	if resp.StatusCode != 202 || string(body) != `{"proxied":/api/chat/start}` {
 		t.Fatalf("proxy = %d %q", resp.StatusCode, body)
 	}
 }

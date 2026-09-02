@@ -57,3 +57,26 @@ func TestImportSessionFileToleratesNonObjectRoot(t *testing.T) {
 		t.Fatalf("non-object root should be tolerated, got %v", err)
 	}
 }
+
+func TestImportSessionFileSkipsEmptySessionID(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "y.json")
+	if err := os.WriteFile(f, []byte(`{"title":"No ID"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "webui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := ImportSessionFile(db, f); err != nil {
+		t.Fatalf("empty session_id should be skipped, got %v", err)
+	}
+	n, err := store.CountSessions(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 sessions, got %d", n)
+	}
+}

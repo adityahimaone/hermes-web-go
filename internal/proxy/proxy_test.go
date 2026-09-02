@@ -13,7 +13,7 @@ func TestIsNative(t *testing.T) {
 	if !IsNative("/health") {
 		t.Fatal("/health should be native")
 	}
-	for _, p := range []string{"/api/sessions", "/static/index.html", "/", "/api/chat"} {
+	for _, p := range []string{"/static/index.html", "/", "/api/chat", "/api/chat/start"} {
 		if IsNative(p) {
 			t.Fatalf("%q should not be native", p)
 		}

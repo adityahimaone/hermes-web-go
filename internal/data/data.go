@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"hermes-web-go/internal/store"
@@ -59,6 +60,9 @@ func ImportSessionFile(db *sql.DB, path string) error {
 		return nil // skip malformed/non-object, don't fail the whole import
 	}
 	copySessionJSON(&s, raw)
+	if s.ID == "" {
+		return nil
+	}
 	return store.ImportSession(db, s)
 }
 
@@ -71,9 +75,25 @@ func copySessionJSON(s *store.SessionImport, raw map[string]json.RawMessage) {
 		return v
 	}
 	s.ID = get("session_id")
+	if s.ID == "" {
+		return // refuse rows without an identifier; never import garbage
+	}
 	s.Title = get("title")
+	s.Workspace = get("workspace")
+	s.Model = get("model")
 	s.CreatedAt = get("created_at")
 	s.UpdatedAt = get("updated_at")
+	if p := get("pinned"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			s.Pinned = v
+		}
+	}
+	if a := get("archived"); a != "" {
+		if v, err := strconv.Atoi(a); err == nil {
+			s.Archived = v
+		}
+	}
+	s.ProjectID = get("project_id")
 	if r := raw["messages"]; r != nil {
 		s.Messages = string(r)
 	} else {

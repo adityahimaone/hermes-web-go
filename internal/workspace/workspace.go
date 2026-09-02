@@ -14,6 +14,12 @@ import (
 // ErrOutsideRoot is returned when a resolved path escapes the workspace root.
 var ErrOutsideRoot = errors.New("path resolves outside workspace")
 
+func HomeDir() (string, error) { return os.UserHomeDir() }
+
+func ReadWorkspacesJSON(root string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(root, "workspaces.json"))
+}
+
 // SafeResolve joins root+rel and verifies the resulting absolute path stays
 // under root after resolving symlinks. It refuses any component that climbs
 // above root (..) and any symlink whose target leaves root.

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -15,6 +16,12 @@ import (
 // catch-all that proxies every non-native route to the legacy backend.
 // A nil proxyHandler leaves non-native routes as 404.
 func NewRouter(staticDir string, proxyHandler http.Handler) http.Handler {
+	return NewRouterWithData(staticDir, proxyHandler, nil, "")
+}
+
+// NewRouterWithData is NewRouter plus the Phase 2 read-only data routes. When
+// db is nil the data routes return 503 (proxy-only mode).
+func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
@@ -23,6 +30,11 @@ func NewRouter(staticDir string, proxyHandler http.Handler) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sessions": 0})
 	})
+
+	// Phase 2 read-only data routes are native when the DB is present.
+	if db != nil {
+		DataRouter(r, db, dataRoot)
+	}
 
 	r.Handle("/static", http.RedirectHandler("/static/", http.StatusMovedPermanently))
 

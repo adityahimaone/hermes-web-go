@@ -5,9 +5,9 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -149,8 +149,7 @@ func parseTime(v string) float64 {
 	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 		return float64(t.UnixNano()) / 1e9
 	}
-	var f float64
-	if _, err := fmt.Sscanf(v, "%f", &f); err == nil {
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
 		return f
 	}
 	return 0
