@@ -58,7 +58,7 @@ func SafeResolve(root, rel string) (string, error) {
 	return clean, nil
 }
 
-// SafeResolveNonNull resolves root+rel for a NE W file target. Unlike SafeResolve
+// SafeResolveNonNull resolves root+rel for a new file target. Unlike SafeResolve
 // it does not require the final path component to exist; it only checks the nearest
 // existing parent does not escape root.
 func SafeResolveNonNull(root, rel string) (string, error) {

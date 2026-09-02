@@ -330,6 +330,10 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			writeError(w, http.StatusBadRequest, "invalid filename")
 			return
 		}
+		if info, statErr := os.Lstat(target); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			writeError(w, http.StatusBadRequest, "cannot upload to symlinked entry")
+			return
+		}
 		dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
