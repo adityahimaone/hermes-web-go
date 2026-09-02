@@ -76,7 +76,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 		// attach even if the agent returns instantly.
 		streamID, ch := reg.Create()
 
-		ctx, cancel := context.WithCancel(req.Context())
+		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			defer cancel()
 			defer reg.Close(streamID)
@@ -139,7 +139,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.Header().Set("Connection", "close")
-		stream.WriteSSE(w, ch)
+		stream.WriteSSEWithContext(req.Context(), w, ch, stream.SSEHeartbeatInterval)
 	})
 
 	r.Get("/api/chat/stream/status", func(w http.ResponseWriter, req *http.Request) {
@@ -171,12 +171,36 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 			writeError(w, http.StatusInternalServerError, "failed to persist message")
 			return
 		}
+
+		evCh, err := client.RunTurn(req.Context(), agentclient.TurnRequest{
+			SessionID: body.SessionID,
+			TaskID:    body.SessionID,
+			Message:   body.Message,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "agent call failed: "+err.Error())
+			return
+		}
+		var answer string
+		for ev := range evCh {
+			if ev.Type == agentclient.EventToken {
+				answer += ev.Text
+			}
+			if ev.Type == agentclient.EventError {
+				writeError(w, http.StatusInternalServerError, "agent error: "+ev.Error)
+				return
+			}
+		}
 		row, err := store.GetSession(db, body.SessionID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load session")
 			return
 		}
-		writeJSON(w, sessionResponse(row))
+		writeJSON(w, map[string]any{
+			"answer":  answer,
+			"status":  "done",
+			"session": sessionResponse(row),
+		})
 	})
 
 }

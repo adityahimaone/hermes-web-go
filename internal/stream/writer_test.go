@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,7 +94,7 @@ func TestWriterHeartbeat(t *testing.T) {
 	w := &bufFlusher{ResponseWriter: httptest.NewRecorder()}
 
 	done := make(chan bool, 1)
-	go func() { done <- writeSSE(w, ch, 20*time.Millisecond) }()
+	go func() { done <- WriteSSEWithContext(context.Background(), w, ch, 20*time.Millisecond) }()
 
 	time.Sleep(70 * time.Millisecond)
 	close(ch)
@@ -106,3 +107,43 @@ func TestWriterHeartbeat(t *testing.T) {
 		t.Fatalf("heartbeat missing: %q", w.String())
 	}
 }
+
+// TestWriterDisconnect proves WriteSSE returns false when the client
+// disconnects. Go's http.CloseNotifier is deprecated; use a context.
+func TestWriterDisconnect(t *testing.T) {
+	ch := make(chan agentclient.TurnEvent, 4)
+	ch <- agentclient.TurnEvent{Type: agentclient.EventToken, Text: "going"}
+	ch <- agentclient.TurnEvent{Type: agentclient.EventToken, Text: "still going"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &cancelWriter{ResponseWriter: httptest.NewRecorder(), ctx: ctx}
+
+	done := make(chan bool, 1)
+	go func() { done <- WriteSSEWithContext(ctx, w, ch, 30*time.Second) }()
+
+	// Let the writer process the first event
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context (simulate client disconnect)
+	cancel()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("writer should return false on disconnect")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("writer hung after disconnect")
+	}
+}
+
+// cancelWriter tracks a context for cancellation simulation.
+type cancelWriter struct {
+	http.ResponseWriter
+	ctx context.Context
+}
+
+func (c *cancelWriter) Flush() {}
+
+// WriteSSE is the public entry point. This version is unchanged.
+// The context-aware version is writeSSEWithContext.

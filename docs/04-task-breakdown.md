@@ -94,17 +94,19 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] `POST /api/chat/start` — validates session, saves user message, spawns goroutine, returns
       `{stream_id, session_id}` immediately. Evidence: `TestChatStartStreamsTokenAndDone`,
       `TestChatStartValidatesSession`; commit `ec72c10`.
-- [ ] `GET /api/chat/stream` — SSE writer, forwards channel events, handles disconnect cleanly
-      (check `r.Context().Done()`), cleans up the stream registry entry in a deferred func.
-      Implemented and covered for event forwarding, but disconnect cleanup still needs a dedicated
-      context-cancellation test before checkbox close.
+- [x] `GET /api/chat/stream` — SSE writer, forwards channel events, handles disconnect cleanly
+      (check `r.Context().Done()`). Completed stream channels are closed/marked inactive while
+      their buffered entry remains available for reconnect drain, matching Python `STREAMS`
+      behavior; `TestWriterDisconnect` and `TestChatTurnSurvivesStartRequest` cover cancellation
+      and turn lifetime. Evidence: `internal/stream/writer_test.go`, `internal/httpserver/chat_test.go`.
+
+- [x] `POST /api/chat` — synchronous fallback blocks until the agent event channel completes,
+      then returns `{answer, status, session}`. Evidence: `TestChatSyncBlocksUntilAgentCompletes`.
+
+- [x] Concurrency test: two concurrent chats in different sessions preserve session-specific
+      event streams. Evidence: `TestChatConcurrentSessionsNoCrossContamination` under `-race`.
 - [x] `GET /api/chat/stream/status` — reconnect-banner support. Evidence: `TestChatStartStreamsTokenAndDone`
       confirms inactive status after completed stream; commit `ec72c10`.
-- [ ] `POST /api/chat` — synchronous fallback (blocks until the goroutine completes). Route exists,
-      but current implementation only persists and returns; blocking agent execution remains open.
-- [ ] Concurrency test: fire two concurrent chats in two different sessions, assert no
-      cross-contamination (this is the test that proves the Phase-6-of-Python-doc TD1 fix is real
-      in Go, per `01-architecture-design.md` §6).
 - [ ] Remove proxy fallback for chat routes once green — this is the highest-risk cutover, budget
       extra soak time (run both old and new in shadow/compare mode if feasible before fully cutting).
       **`httpClient` is the only transport in play at this point — ship and soak this before touching 4b.**

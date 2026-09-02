@@ -2,6 +2,7 @@
 package stream
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -31,13 +32,17 @@ func eventJSON(ev agentclient.TurnEvent) []byte {
 	}
 }
 
-// WriteSSE drains ch and writes frontend-compatible SSE frames to w. Channel
-// close is the internal end-of-stream signal; empty token text remains valid.
+// WriteSSE drains ch and writes SSE frames to w. Channel close is the internal
+// end-of-stream signal; empty token text remains valid. The request context is
+// passed through WriteSSEWithContext so a client disconnect (r.Context().Done())
+// terminates the writer instead of leaking it. Public entry kept for tests.
 func WriteSSE(w http.ResponseWriter, ch <-chan agentclient.TurnEvent) bool {
-	return writeSSE(w, ch, SSEHeartbeatInterval)
+	return WriteSSEWithContext(context.Background(), w, ch, SSEHeartbeatInterval)
 }
 
-func writeSSE(w http.ResponseWriter, ch <-chan agentclient.TurnEvent, interval time.Duration) bool {
+// WriteSSEWithContext is the context-aware writer. It returns false when the
+// client disconnects (ctx cancelled) or a write fails; true on clean close.
+func WriteSSEWithContext(ctx context.Context, w http.ResponseWriter, ch <-chan agentclient.TurnEvent, interval time.Duration) bool {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return false
@@ -67,6 +72,8 @@ func writeSSE(w http.ResponseWriter, ch <-chan agentclient.TurnEvent, interval t
 			if !write([]byte(": heartbeat\n\n")) {
 				return false
 			}
+		case <-ctx.Done():
+			return false
 		}
 	}
 }
