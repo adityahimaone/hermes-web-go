@@ -80,6 +80,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 		ApprovalRouter(r, st)
 	}
 	CronsRouter(r, routerHermesHome(o))
+	SkillsMemRouter(r, routerHermesHome(o))
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r
 }
@@ -106,6 +107,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	}
 
 	CronsRouter(r, routerHermesHome(o))
+	SkillsMemRouter(r, routerHermesHome(o))
 
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r

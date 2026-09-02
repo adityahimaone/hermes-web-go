@@ -169,7 +169,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       POST mutations remain proxy-backed until an agent-side scheduler seam exists.
       Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`.
 - [ ] `internal/skillsmem`: read `SKILL.md` files / skill registry, `MEMORY.md`/`USER.md`/`SOUL.md`.
+      Partial: native read package supports frontmatter skill discovery, nested skill lookup, and
+      memory files; agent-specific external skill namespaces/config redaction remain open.
 - [ ] `GET /api/skills`, `/api/skills/content`, `/api/memory`.
+      Partial: all three GET routes are native and live-verified; `TestSkillsListRoute`,
+      `TestSkillsContentRoute`, `TestMemoryRoute`, plus traversal/missing-skill checks.
 - [ ] Remove proxy fallback once green.
 
 ## Phase 7 — Auth + observability
