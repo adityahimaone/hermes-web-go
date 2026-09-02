@@ -159,3 +159,47 @@ func parseTime(v string) float64 {
 func MarshalMessages(raw []byte) ([]byte, error) {
 	return json.RawMessage(raw), nil
 }
+
+// SessionUpdate carries optional fields to update on a session.
+type SessionUpdate struct {
+	Workspace *string
+	Model     *string
+	Pinned    *int
+	Archived  *int
+	ProjectID *string
+}
+
+// CreateSession inserts a new session row. Workspace and title default to empty.
+func CreateSession(db *sql.DB, s SessionImport) error {
+	_, err := db.Exec(`INSERT INTO sessions (session_id, title, workspace, model, messages, tool_calls, created_at, updated_at, pinned, archived, project_id)
+		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
+		s.ID, s.Title, s.Workspace, s.Model, s.Messages,
+		parseTime(s.CreatedAt), parseTime(s.UpdatedAt), s.Pinned, s.Archived, s.ProjectID)
+	return err
+}
+
+// UpdateSession updates optional fields on a session. Only non-nil fields are applied.
+func UpdateSession(db *sql.DB, id string, u SessionUpdate) error {
+	_, err := db.Exec(`UPDATE sessions SET workspace=COALESCE(?,workspace), model=COALESCE(?,model), pinned=COALESCE(?,pinned), archived=COALESCE(?,archived), project_id=COALESCE(?,project_id) WHERE session_id=?`,
+		u.Workspace, u.Model, u.Pinned, u.Archived, u.ProjectID, id)
+	return err
+}
+
+// RenameSession updates the title of a session.
+func RenameSession(db *sql.DB, id, title string) error {
+	_, err := db.Exec(`UPDATE sessions SET title=? WHERE session_id=?`, title, id)
+	return err
+}
+
+// DeleteSession removes a session row. Returns sql.ErrNoRows when the session does not exist.
+func DeleteSession(db *sql.DB, id string) error {
+	r, err := db.Exec(`DELETE FROM sessions WHERE session_id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := r.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}

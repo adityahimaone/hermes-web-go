@@ -39,14 +39,112 @@ func SafeResolve(root, rel string) (string, error) {
 	if clean != rootAbs && !strings.HasPrefix(clean, rootAbs+string(filepath.Separator)) {
 		return "", ErrOutsideRoot
 	}
-	// Evaluate symlinks; if the resolved target escapes root, reject.
-	eval, err := filepath.EvalSymlinks(clean)
-	if err == nil {
-		if eval != rootEval && !strings.HasPrefix(eval, rootEval+string(filepath.Separator)) {
-			return "", ErrOutsideRoot
+	// Evaluate target, or nearest existing parent for new files.
+	evalPath := clean
+	for {
+		eval, evalErr := filepath.EvalSymlinks(evalPath)
+		if evalErr == nil {
+			if eval != rootEval && !strings.HasPrefix(eval, rootEval+string(filepath.Separator)) {
+				return "", ErrOutsideRoot
+			}
+			break
 		}
+		next := filepath.Dir(evalPath)
+		if next == evalPath {
+			break
+		}
+		evalPath = next
 	}
 	return clean, nil
+}
+
+// SafeResolveNonNull resolves root+rel for a NE W file target. Unlike SafeResolve
+// it does not require the final path component to exist; it only checks the nearest
+// existing parent does not escape root.
+func SafeResolveNonNull(root, rel string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	rootEval, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		rootEval = rootAbs
+	}
+	target := filepath.Join(rootAbs, filepath.FromSlash(rel))
+	clean := filepath.Clean(target)
+	if clean != rootAbs && !strings.HasPrefix(clean, rootAbs+string(filepath.Separator)) {
+		return "", ErrOutsideRoot
+	}
+	// Check nearest existing parent.
+	parent := filepath.Dir(clean)
+	for {
+		eval, evalErr := filepath.EvalSymlinks(parent)
+		if evalErr == nil {
+			if eval != rootEval && !strings.HasPrefix(eval, rootEval+string(filepath.Separator)) {
+				return "", ErrOutsideRoot
+			}
+			break
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			break
+		}
+		parent = next
+	}
+	return clean, nil
+}
+
+// SaveFile overwrites an existing regular file under root.
+func SaveFile(root, rel string, data []byte) error {
+	target, err := SafeResolve(root, rel)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("cannot save to symlinked entry")
+	}
+	if info.IsDir() {
+		return errors.New("cannot save: path is a directory")
+	}
+	return os.WriteFile(target, data, info.Mode().Perm())
+}
+
+// CreateFile creates a new regular file under root without overwriting.
+func CreateFile(root, rel string, data []byte) error {
+	target, err := SafeResolve(root, rel)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return err
+}
+
+// DeleteFile removes an existing regular file under root, never a symlink.
+func DeleteFile(root, rel string) error {
+	target, err := SafeResolve(root, rel)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("cannot delete symlinked entry")
+	}
+	if info.IsDir() {
+		return errors.New("cannot delete directory")
+	}
+	return os.Remove(target)
 }
 
 // Entry mirrors the workspace directory-entry fields the browser consumes.

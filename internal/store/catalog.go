@@ -46,6 +46,27 @@ type WorkspaceRow struct {
 }
 
 // ListWorkspaces returns all workspace rows ordered by insertion.
+// AddWorkspace registers or updates a workspace.
+func AddWorkspace(db *sql.DB, path, name string) error {
+	_, err := db.Exec(`INSERT INTO workspaces (path, name) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET name=excluded.name`, path, name)
+	return err
+}
+
+// RemoveWorkspace removes a workspace and succeeds when it is absent.
+func RemoveWorkspace(db *sql.DB, path string) error {
+	_, err := db.Exec(`DELETE FROM workspaces WHERE path=?`, path)
+	return err
+}
+
+// RenameWorkspace updates a registered workspace name.
+func RenameWorkspace(db *sql.DB, path, name string) error {
+	result, err := db.Exec(`UPDATE workspaces SET name=? WHERE path=?`, name, path)
+	if err != nil { return err }
+	n, _ := result.RowsAffected()
+	if n == 0 { return sql.ErrNoRows }
+	return nil
+}
+
 func ListWorkspaces(db *sql.DB) ([]WorkspaceRow, error) {
 	rows, err := db.Query(`SELECT path, name FROM workspaces ORDER BY rowid`)
 	if err != nil {

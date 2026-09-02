@@ -1,13 +1,17 @@
 package httpserver
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,6 +41,344 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		r.Get("/api/workspaces", func(w http.ResponseWriter, req *http.Request) { dataUnavailable(w) })
 		return
 	}
+
+	r.Post("/api/session/new", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+			Title     string `json:"title"`
+			Workspace string `json:"workspace"`
+			Model     string `json:"model"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if body.SessionID == "" {
+			body.SessionID = newSessionID()
+		}
+		now := strconv.FormatInt(time.Now().Unix(), 10)
+		if err := store.CreateSession(db, store.SessionImport{ID: body.SessionID, Title: body.Title, Workspace: body.Workspace, Model: body.Model, Messages: "[]", CreatedAt: now, UpdatedAt: now}); err != nil {
+			writeError(w, http.StatusConflict, "session already exists")
+			return
+		}
+		row, _ := store.GetSession(db, body.SessionID)
+		writeJSON(w, map[string]any{"session": sessionResponse(row)})
+	})
+
+	r.Post("/api/session/rename", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+			Title     string `json:"title"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
+			writeError(w, http.StatusBadRequest, "session_id and title are required")
+			return
+		}
+		if _, err := store.GetSession(db, body.SessionID); errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if err := store.RenameSession(db, body.SessionID, body.Title); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rename session")
+			return
+		}
+		row, _ := store.GetSession(db, body.SessionID)
+		writeJSON(w, map[string]any{"session": sessionResponse(row)})
+	})
+
+	r.Post("/api/session/update", func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		var id string
+		_ = json.Unmarshal(body["session_id"], &id)
+		if id == "" {
+			writeError(w, http.StatusBadRequest, "session_id is required")
+			return
+		}
+		if _, err := store.GetSession(db, id); errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		u := store.SessionUpdate{}
+		if r := body["workspace"]; r != nil {
+			var ws string
+			_ = json.Unmarshal(r, &ws)
+			u.Workspace = &ws
+		}
+		if r := body["model"]; r != nil {
+			var model string
+			_ = json.Unmarshal(r, &model)
+			u.Model = &model
+		}
+		if r := body["pinned"]; r != nil {
+			var pinned int
+			_ = json.Unmarshal(r, &pinned)
+			u.Pinned = &pinned
+		}
+		if r := body["archived"]; r != nil {
+			var archived int
+			_ = json.Unmarshal(r, &archived)
+			u.Archived = &archived
+		}
+		if err := store.UpdateSession(db, id, u); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update session")
+			return
+		}
+		row, _ := store.GetSession(db, id)
+		writeJSON(w, map[string]any{"session": sessionResponse(row)})
+	})
+
+	r.Post("/api/session/delete", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
+			writeError(w, http.StatusBadRequest, "session_id is required")
+			return
+		}
+		if err := store.DeleteSession(db, body.SessionID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to delete session")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "session_id": body.SessionID})
+	})
+
+	r.Post("/api/workspaces/add", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" {
+			writeError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+		info, err := os.Stat(body.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "path does not exist")
+			return
+		}
+		if !info.IsDir() {
+			writeError(w, http.StatusBadRequest, "path is not a directory")
+			return
+		}
+		cleaned := filepath.Clean(body.Path)
+		if cleaned == string(filepath.Separator) {
+			writeError(w, http.StatusBadRequest, "cannot add system root")
+			return
+		}
+		if body.Name == "" {
+			body.Name = filepath.Base(cleaned)
+		}
+		if err := store.AddWorkspace(db, cleaned, body.Name); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add workspace")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "path": cleaned})
+	})
+
+	r.Post("/api/workspaces/remove", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" {
+			writeError(w, http.StatusBadRequest, "path is required")
+			return
+		}
+		if err := store.RemoveWorkspace(db, filepath.Clean(body.Path)); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to remove workspace")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+
+	r.Post("/api/workspaces/rename", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Path string `json:"path"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" || body.Name == "" {
+			writeError(w, http.StatusBadRequest, "path and name are required")
+			return
+		}
+		if err := store.RenameWorkspace(db, filepath.Clean(body.Path), body.Name); errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Workspace not found")
+			return
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to rename workspace")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "path": filepath.Clean(body.Path), "name": body.Name})
+	})
+
+	r.Post("/api/file/save", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+			Path      string `json:"path"`
+			Content   string `json:"content"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" || body.Path == "" {
+			writeError(w, http.StatusBadRequest, "session_id and path are required")
+			return
+		}
+		root, err := workspaceRootForSession(db, body.SessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if err := workspace.SaveFile(root, body.Path, []byte(body.Content)); err != nil {
+			if errors.Is(err, workspace.ErrOutsideRoot) {
+				writeError(w, http.StatusBadRequest, "path escapes workspace")
+				return
+			}
+			if os.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, "File not found")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "path": body.Path})
+	})
+
+	r.Post("/api/file/create", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+			Path      string `json:"path"`
+			Content   string `json:"content"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" || body.Path == "" {
+			writeError(w, http.StatusBadRequest, "session_id and path are required")
+			return
+		}
+		root, err := workspaceRootForSession(db, body.SessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if err := workspace.CreateFile(root, body.Path, []byte(body.Content)); err != nil {
+			if errors.Is(err, workspace.ErrOutsideRoot) {
+				writeError(w, http.StatusBadRequest, "path escapes workspace")
+				return
+			}
+			if os.IsExist(err) {
+				writeError(w, http.StatusConflict, "File already exists")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "path": body.Path})
+	})
+
+	r.Post("/api/file/delete", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+			Path      string `json:"path"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" || body.Path == "" {
+			writeError(w, http.StatusBadRequest, "session_id and path are required")
+			return
+		}
+		root, err := workspaceRootForSession(db, body.SessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if err := workspace.DeleteFile(root, body.Path); err != nil {
+			if errors.Is(err, workspace.ErrOutsideRoot) {
+				writeError(w, http.StatusBadRequest, "path escapes workspace")
+				return
+			}
+			if os.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, "File not found")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "path": body.Path})
+	})
+
+	r.Post("/api/upload", func(w http.ResponseWriter, req *http.Request) {
+		req.Body = http.MaxBytesReader(w, req.Body, uploadMaxBytes())
+		if err := req.ParseMultipartForm(uploadMaxBytes()); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid multipart body")
+			return
+		}
+		sid := req.FormValue("session_id")
+		if sid == "" {
+			writeError(w, http.StatusBadRequest, "session_id is required")
+			return
+		}
+		root, err := workspaceRootForSession(db, sid)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		file, header, err := req.FormFile("file")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "file is required")
+			return
+		}
+		defer file.Close()
+		name := sanitizeFilename(header.Filename)
+		target, err := workspace.SafeResolveNonNull(root, name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid filename")
+			return
+		}
+		dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		defer dst.Close()
+		n, err := io.Copy(dst, file)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "failed to write upload")
+			return
+		}
+		writeJSON(w, map[string]any{"filename": name, "path": name, "size": n})
+	})
+
+	r.Get("/api/session/export", func(w http.ResponseWriter, req *http.Request) {
+		sid := req.URL.Query().Get("session_id")
+		if sid == "" {
+			writeError(w, http.StatusBadRequest, "session_id is required")
+			return
+		}
+		row, err := store.GetSession(db, sid)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "Session not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load session")
+			return
+		}
+		title := row.Title
+		if strings.HasPrefix(title, "Reply ") {
+			title = title[len("Reply "):]
+		}
+		w.Header().Set("Content-Disposition", "attachment; filename=\"session.json\"")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id":    row.ID,
+			"title":         title,
+			"workspace":     row.Workspace,
+			"model":         row.Model,
+			"created_at":    row.CreatedAt,
+			"updated_at":    row.UpdatedAt,
+			"pinned":        row.Pinned,
+			"archived":      row.Archived,
+			"project_id":    row.ProjectID,
+			"message_count": messageCount(row.Messages),
+			"messages":      json.RawMessage(row.Messages),
+		})
+	})
 
 	r.Get("/api/sessions", func(w http.ResponseWriter, req *http.Request) {
 		limit, offset := pageParams(req)
@@ -267,6 +609,34 @@ func workspaceRootForSession(db *sql.DB, sid string) (string, error) {
 	return ws, nil
 }
 
+func uploadMaxBytes() int64 {
+	mb, err := strconv.ParseInt(os.Getenv("HERMES_WEBUI_MAX_UPLOAD_MB"), 10, 64)
+	if err != nil || mb <= 0 {
+		mb = 20
+	}
+	return mb * 1024 * 1024
+}
+
+func sanitizeFilename(name string) string {
+	name = filepath.Base(name)
+	var b strings.Builder
+	for _, r := range name {
+		if r == '_' || r == '-' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	name = b.String()
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	if name == "" || name == "." || name == ".." {
+		return "upload"
+	}
+	return name
+}
+
 func pageParams(req *http.Request) (limit, offset int) {
 	limit, _ = strconv.Atoi(req.URL.Query().Get("limit"))
 	offset, _ = strconv.Atoi(req.URL.Query().Get("offset"))
@@ -277,6 +647,34 @@ func pageParams(req *http.Request) (limit, offset int) {
 		offset = 0
 	}
 	return limit, offset
+}
+
+// newSessionID returns a 12-char hex session id matching the Python server shape.
+func newSessionID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// sessionResponse returns the public session shape used by mutation responses.
+func sessionResponse(row store.SessionRow) map[string]any {
+	title := row.Title
+	if strings.HasPrefix(title, "Reply ") {
+		title = title[len("Reply "):]
+	}
+	return map[string]any{
+		"session_id":    row.ID,
+		"title":         title,
+		"workspace":     row.Workspace,
+		"model":         row.Model,
+		"created_at":    row.CreatedAt,
+		"updated_at":    row.UpdatedAt,
+		"pinned":        row.Pinned,
+		"archived":      row.Archived,
+		"project_id":    row.ProjectID,
+		"message_count": messageCount(row.Messages),
+		"messages":      json.RawMessage(row.Messages),
+	}
 }
 
 func sessionListItem(row store.SessionRow) map[string]any {
