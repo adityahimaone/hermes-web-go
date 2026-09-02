@@ -141,8 +141,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] `GET /api/approval/pending`, `POST /api/approval/respond`. Evidence:
       `internal/httpserver/approval_test.go` (invalid choice 400, missing session 400,
       submit→pending→respond→session approval→queue cleared).
-- [ ] Wire approval surfacing into the `tool` SSE event path (approval appears within the same
-      stream immediately after the triggering tool call, not only via polling).
+- [x] Wire approval surfacing into the `tool` SSE event path (approval appears within the same
+      stream immediately after the triggering tool call, not only via polling). Evidence:
+      turn relay in `internal/httpserver/chat.go` submits `EventApproval` to the shared
+      `approval.Store` before forwarding to the stream; `TestChatStartApprovalEventPopulatesStore`
+      proves both SSE delivery and store population.
 - [ ] Permanent-allowlist persistence (SQLite instead of Python's flat file) + import any existing
       allowlist during the Phase 2 importer (retroactively, or as an add-on migration step here).
 - [x] Rule #9 test: multi-pattern approval, assert all `pattern_keys` get approved, not just the
