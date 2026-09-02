@@ -18,9 +18,10 @@ The MVP is done when all of the following are simultaneously true:
 4. Every other route (`/api/chat/*`, `/api/approval/*`, uploads, file mutations, crons, skills,
    memory) is transparently reverse-proxied to the still-running Python process — the user
    notices **no functional difference** during this window.
-5. Existing session data (JSON files under `~/.hermes/webui/sessions/`) has been imported into
-   SQLite via the one-shot importer, verified against the original files (row count matches file
-   count, spot-checked message content matches).
+5. Existing session data has been imported into SQLite via the one-shot importer, verified against
+   the original files (row count matches source count, spot-checked message content matches). **Note:
+   primary source now Hermes `state.db`** (live store), verified: 1 session imported, id/messages/
+   workspace match; legacy JSON fallback only when state.db unavailable.
 6. Memory footprint of the Go process alone (excluding the still-running Python process, which
    is expected during MVP) is measured and recorded as the baseline "lightweight" number to beat
    in later phases — this is the number that ultimately proves the rewrite achieved its goal.

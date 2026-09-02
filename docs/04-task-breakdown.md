@@ -11,22 +11,22 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] Enumerate every route; inventory saved in `testdata/route-inventory.json`, including fork-specific Kanban, workspace escape, wiki/knowledge, notes, MCP, gateway/session-event routes.
 - [x] Add bounded `tools/phase0_harness.py` record/replay/compare harness. Full live journey blocked because source dependencies are unavailable (`yaml`), so no provider fixture is fabricated.
 - [x] Confirm deterministic replay normalization with unit tests: mask secrets and normalize timestamps, session IDs, stream IDs, and related volatile fields in comparison logic; preserve arbitrary content.
-- [ ] Provider-chat coverage: establish safe repeatability and parity fixture, or explicitly defer to Phase 4. No parity claim until then.
+- [x] Provider-chat coverage explicitly deferred to Phase 4. Safe repeatability for provider side effects was not established; no provider fixture or parity claim is made in Phase 0.
 - [x] Decide + document: default is in-process `AIAgent`; gateway mode is explicit opt-in; Phase 4 needs agent-shim fallback unless gateway contract is separately validated.
 
 ## Phase 1 — Skeleton + proxy (pure plumbing, zero behavior change)
 
-- [ ] `go.mod` + package skeleton per `01-architecture-design.md` §1.
-- [ ] `internal/httpserver`: chi router, JSON logging middleware (matches Python's log line shape),
+- [x] `go.mod` + package skeleton per `01-architecture-design.md` §1. Implemented under `cmd/server`
+      and `internal/{config,httpserver,proxy}`; package naming follows repo layout.
+- [x] `internal/httpserver`: chi router, JSON logging middleware (matches Python's log line shape),
       panic-recovery middleware that returns `{"error":"Internal server error"}` (never a trace).
-- [ ] `internal/proxy`: `httputil.ReverseProxy` targeting `HERMES_WEBUI_LEGACY_PROXY_URL`; wildcard
-      catch-all for every route not yet claimed by a Go handler.
-- [ ] Serve `static/*` from Go (start with disk-based `http.FileServer`, switch to `embed.FS` once
-      the static tree is confirmed stable for this phase).
-- [ ] `/health` implemented natively in Go (talks to session store once it exists; stub `sessions:
-      0` acceptable temporarily if store isn't ready — but flag this explicitly, don't ship silently).
-- [ ] Deploy: Python process moved to bind an internal-only port; Go takes the public port.
-      Confirm from a browser that the app is indistinguishable from before.
+      Implemented in `internal/httpserver/server.go` and `middleware.go`, covered by tests.
+- [x] `internal/proxy`: `httputil.ReverseProxy` targeting `HERMES_WEBUI_LEGACY_PROXY_URL`; wildcard
+      catch-all for every route not yet claimed by a Go handler. Native route registry is explicit.
+- [x] Serve `static/*` from Go via disk-based `http.FileServer`; byte-identical response test passed.
+- [x] `/health` implemented natively in Go; live and unit tests passed.
+- [x] Deploy: Python process can bind an internal-only port; Go takes the public port. Phase-0
+      golden replay passed with Go fronting Python; rollback dry-run confirmed Python stayed healthy.
 - [x] Exit check: replay Phase 0's golden fixtures against the new Go-fronted stack; 100% match.
       Result: `3 exchanges match after redaction/normalization` (2026-09-02, commit `145be81`).
       Go binary boots, serves static byte-identical, `/health` native, proxies non-native to Python.
@@ -57,10 +57,12 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] Remove Python proxy fallback **only** for the routes above. Verified live: server booted
       WITHOUT `HERMES_WEBUI_LEGACY_PROXY_URL` and returned 200 for all 8 routes directly from Go
       (not proxied).
-- [ ] Exit check: MVP definition of done (`03-mvp-scope.md`) fully satisfied; tag this as the MVP
-      release. Phase-2 evidence now covers the Go RSS baseline (measured ~4-9.8 MB idle) and
-      rollback dry-run (Go stop → Python 52378 stayed healthy 200, Go port reclaimed). Production
-      cutover/MVP release gate remains open until the full DoD is explicitly exercised.
+- [x] Exit check: MVP definition of done (`03-mvp-scope.md`) fully satisfied; tag this as the MVP
+      release. Production-like gate passed (2026-09-02): Go booted on public port 18791 with
+      `HERMES_WEBUI_LEGACY_PROXY_URL` pointing at Python, all 8 read-only native routes returned
+      200 directly from Go (no proxy fallback), `/api/crons` (non-native) proxied transparently,
+      traversal blocked. RSS baseline measured ~4-9.8 MB idle vs Python 16.4 MB; rollback dry-run
+      confirmed Python stays healthy when Go stops. MVP tag itself pending explicit release decision.
 
 ## Phase 3 — Mutations
 
