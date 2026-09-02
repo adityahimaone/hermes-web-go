@@ -66,15 +66,17 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ## Phase 3 — Mutations
 
-- [ ] `POST /api/session/new`, `/api/session/update`, `/api/session/delete`, `/api/session/rename`.
-      Verify Rule #1 (delete never creates) with an explicit test.
-- [ ] `POST /api/workspaces/add` (permissive validation), `/remove`, `/rename`.
-- [ ] `internal/upload`: multipart parser (Go's `mime/multipart` stdlib is fine here — this is one
-      case where Python's manual parser existed only to route around a stdlib gap that Go doesn't
-      have; use the stdlib directly, don't hand-roll). Filename sanitization + size cap parity.
-- [ ] `POST /api/upload`, `/api/file/save`, `/api/file/create`, `/api/file/delete`.
-- [ ] `GET /api/session/export` (Content-Disposition header parity).
-- [ ] Remove proxy fallback for these routes once green.
+- [x] `POST /api/session/new`, `/api/session/update`, `/api/session/delete`, `/api/session/rename`.
+      Rule #1 (delete never creates) covered by `TestSessionDeleteNeverCreates`.
+- [x] `POST /api/workspaces/add` (permissive validation), `/remove`, `/rename`.
+      Persistence and 404 rename behavior implemented in `internal/store/catalog.go`.
+- [x] `internal/upload`: stdlib multipart parser, filename sanitization, 20 MB default cap;
+      `HERMES_WEBUI_MAX_UPLOAD_MB` override supported.
+- [x] `POST /api/upload`, `/api/file/save`, `/api/file/create`, `/api/file/delete`.
+      Strict traversal/symlink protection covered in workspace and HTTP tests.
+- [x] `GET /api/session/export` with `Content-Disposition: attachment` parity.
+- [x] Remove proxy fallback for these routes once green; registry marks all Phase 3 routes native.
+      Verification: `go test ./...`, `go test ./... -race`, and `go vet ./...` pass (2026-09-02).
 
 ## Phase 4 — Chat + streaming
 
