@@ -148,6 +148,10 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       proves both SSE delivery and store population.
 - [ ] Permanent-allowlist persistence (SQLite instead of Python's flat file) + import any existing
       allowlist during the Phase 2 importer (retroactively, or as an add-on migration step here).
+      Evidence: `internal/approval/persist.go` (settings-table JSON union) +
+      `TestStorePersistsPermanentToDB`, `TestStoreLoadsPermanentsOnBoot`,
+      `TestSQLitePersistenceRoundTrip`; wired in `cmd/server/main.go` via `NewStoreP`.
+      Python allowlist-file import remains open (only SQLite storage verified live so far).
 - [x] Rule #9 test: multi-pattern approval, assert all `pattern_keys` get approved, not just the
       first. Evidence: `TestApprovalStoreAlwaysPersistsAllPatternKeys` (always) and
       `TestApprovalStoreQueueAndChoices` (session) iterate `PatternKeys`.

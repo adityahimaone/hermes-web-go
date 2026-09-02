@@ -20,12 +20,20 @@ type PendingApproval struct {
 	RunID       string   // optional gateway run_id mirror
 }
 
+// Persistence is the seam for persisting permanent approvals. The store
+// calls SavePermanent when "always" is chosen, and LoadPermanent on boot.
+type Persistence interface {
+	SavePermanent(keys []string) error
+	LoadPermanent() ([]string, error)
+}
+
 // Store is the Go equivalent of Python's `_pending`/`_lock`/`_permanent_approved`.
 type Store struct {
 	mu        sync.Mutex
-	pending   map[string][]PendingApproval // keyed by session, ordered queue (head first)
-	approved  map[string]map[string]bool   // session -> pattern_key -> true (session scope)
-	permanent map[string]bool              // pattern_key -> true (always scope)
+	pending   map[string][]PendingApproval
+	approved  map[string]map[string]bool
+	permanent map[string]bool
+	p         Persistence
 }
 
 func newID() string {
@@ -36,13 +44,30 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// NewStore creates an empty approval store.
+// NewStore creates an empty in-memory approval store.
 func NewStore() *Store {
-	return &Store{
+	return NewStoreP(nil)
+}
+
+// NewStoreP creates an approval store and loads permanent approvals from p.
+// Load failures leave the store fail-closed (no approvals auto-added).
+func NewStoreP(p Persistence) *Store {
+	s := &Store{
 		pending:   make(map[string][]PendingApproval),
 		approved:  make(map[string]map[string]bool),
 		permanent: make(map[string]bool),
+		p:         p,
 	}
+	if p != nil {
+		if keys, err := p.LoadPermanent(); err == nil {
+			for _, key := range keys {
+				if key != "" {
+					s.permanent[key] = true
+				}
+			}
+		}
+	}
+	return s
 }
 
 // Submit appends a pending approval to the session's queue. A missing ID is
@@ -121,6 +146,9 @@ func (s *Store) Respond(sessionID, approvalID, choice string) bool {
 	} else if choice == "always" {
 		for _, key := range entry.PatternKeys {
 			s.permanent[key] = true
+		}
+		if s.p != nil {
+			_ = s.p.SavePermanent(entry.PatternKeys)
 		}
 	}
 	return true

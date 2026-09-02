@@ -104,7 +104,8 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot)
 	}
 	client := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
-	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approval.NewStore())
+	approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
+	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore)
 }
 
 // importFromStateDB opens Hermes state.db and imports sessions+messages.
