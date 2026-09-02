@@ -9,7 +9,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"hermes-web-go/internal/agentclient"
 	"hermes-web-go/internal/proxy"
+	"hermes-web-go/internal/stream"
 )
 
 // NewRouter builds the full HTTP handler: recovery + logging middleware,
@@ -18,6 +20,25 @@ import (
 // A nil proxyHandler leaves non-native routes as 404.
 func NewRouter(staticDir string, proxyHandler http.Handler) http.Handler {
 	return NewRouterWithData(staticDir, proxyHandler, nil, "")
+}
+
+// NewRouterWithAgent adds native chat routes to the data-enabled router.
+// Callers pass the agent transport explicitly so tests can use a deterministic
+// fake and production can select the configured runner client.
+func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, client agentclient.AgentClient) http.Handler {
+	r := chi.NewRouter()
+	r.Use(Recover)
+	r.Use(Logging)
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sessions": 0})
+	})
+	if db != nil {
+		DataRouter(r, db, dataRoot)
+	}
+	ChatRouter(r, db, stream.NewRegistry(), client)
+	mountStaticAndProxy(r, staticDir, proxyHandler)
+	return r
 }
 
 // NewRouterWithData is NewRouter plus the Phase 2 read-only data routes. When
@@ -37,6 +58,14 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		DataRouter(r, db, dataRoot)
 	}
 
+	mountStaticAndProxy(r, staticDir, proxyHandler)
+	return r
+}
+
+// mountStaticAndProxy attaches the static file server, app shell routes, and
+// the catch-all proxy handler to r. This is shared by NewRouterWithData and
+// NewRouterWithAgent so both serve the same static content.
+func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handler) {
 	r.Handle("/static", http.RedirectHandler("/static/", http.StatusMovedPermanently))
 
 	// Serve the copied frontend byte-identically. Unlike the stdlib FileServer
@@ -81,6 +110,4 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		}
 		proxyHandler.ServeHTTP(w, r)
 	})
-
-	return r
 }

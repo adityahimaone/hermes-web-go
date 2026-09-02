@@ -2,6 +2,22 @@ package config
 
 import "testing"
 
+func TestLoadAgentEnvs(t *testing.T) {
+	vals := map[string]string{
+		"HERMES_WEBUI_AGENT_TRANSPORT": "http",
+		"HERMES_WEBUI_AGENT_SOCKET":    "/tmp/agent.sock",
+		"HERMES_WEBUI_RUNNER_BASE_URL": "http://localhost:8642",
+		"HERMES_WEBUI_RUNNER_API_KEY":  "sk-test",
+	}
+	c, err := Load(func(k string) string { return vals[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AgentTransport != "http" || c.AgentSocket != "/tmp/agent.sock" || c.AgentBaseURL != "http://localhost:8642" || c.AgentAPIKey != "sk-test" {
+		t.Fatalf("agent = %+v", c)
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	c, err := Load(func(string) string { return "" })
 	if err != nil {

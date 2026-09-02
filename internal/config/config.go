@@ -17,6 +17,10 @@ type Config struct {
 	DataRoot       string
 	DatabasePath   string
 	StateDBPath    string
+	AgentTransport string // auto|http|grpc (Phase 4; only http implemented now)
+	AgentSocket    string
+	AgentBaseURL   string
+	AgentAPIKey    string
 }
 
 // Load reads configuration via getenv. An empty value falls back to the default.
@@ -28,6 +32,10 @@ func Load(getenv func(string) string) (Config, error) {
 		DataRoot:       getenv("HERMES_WEBUI_DATA_ROOT"),
 		DatabasePath:   getenv("HERMES_WEBUI_DATABASE_PATH"),
 		StateDBPath:    getenv("HERMES_WEBUI_STATE_DB_PATH"),
+		AgentTransport: getenv("HERMES_WEBUI_AGENT_TRANSPORT"),
+		AgentSocket:    getenv("HERMES_WEBUI_AGENT_SOCKET"),
+		AgentBaseURL:   getenv("HERMES_WEBUI_RUNNER_BASE_URL"),
+		AgentAPIKey:    getenv("HERMES_WEBUI_RUNNER_API_KEY"),
 	}
 	if c.Host == "" {
 		c.Host = "127.0.0.1"

@@ -203,3 +203,35 @@ func DeleteSession(db *sql.DB, id string) error {
 	}
 	return nil
 }
+
+// AppendMessage appends an OpenAI-format message to a session's messages array.
+// The session must already exist. onConflict is irrelevant here; the messages
+// column is read-modify-written under a transaction so concurrent turns on the
+// same session don't clobber each other.
+func AppendMessage(db *sql.DB, id string, msg map[string]any) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	row, err := GetSession(db, id)
+	if err != nil {
+		return err
+	}
+	var messages []map[string]any
+	if row.Messages != "" {
+		if err := json.Unmarshal([]byte(row.Messages), &messages); err != nil {
+			// Corrupt messages column: replace wholesale rather than fail the turn.
+			messages = nil
+		}
+	}
+	messages = append(messages, msg)
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET messages=?, updated_at=? WHERE session_id=?`, string(encoded), time.Now().Unix(), id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

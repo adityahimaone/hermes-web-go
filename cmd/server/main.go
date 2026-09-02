@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"hermes-web-go/internal/agentclient"
 	"hermes-web-go/internal/config"
 	"hermes-web-go/internal/data"
 	"hermes-web-go/internal/httpserver"
@@ -68,7 +69,7 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 
 	srv := &http.Server{
 		Addr:    cfg.Host + ":" + strconv.Itoa(cfg.Port),
-		Handler: httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot),
+		Handler: buildHandler(cfg, proxyHandler, db),
 	}
 
 	errCh := make(chan error, 1)
@@ -91,6 +92,18 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 		return err
 	}
 	return nil
+}
+
+// buildHandler assembles the HTTP handler. When a runner base URL is
+// configured (HERMES_WEBUI_RUNNER_BASE_URL), native chat routes are wired to
+// the HTTP runner client; otherwise the proxy catch-all keeps serving chat
+// (Phase 4 cutover keeps proxy fallback until the runner is verified live).
+func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http.Handler {
+	if cfg.AgentBaseURL == "" {
+		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot)
+	}
+	client := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
+	return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client)
 }
 
 // importFromStateDB opens Hermes state.db and imports sessions+messages.
