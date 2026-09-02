@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -52,6 +53,22 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		}
 		static.ServeHTTP(w, r)
 	}))
+
+	// Python parity: the app shell is served at "/" (and "/session/{id}") so
+	// the base-href script in index.html resolves assets relative to the origin
+	// root (e.g. "static/style.css" -> "/static/style.css"). Served only for
+	// browsers/GET so the catch-all proxy keeps handling unknown API routes.
+	serveShell := func(w http.ResponseWriter, r *http.Request) {
+		clone := r.Clone(r.Context())
+		clone.URL.Path = "/static/"
+		static.ServeHTTP(w, clone)
+	}
+	r.Get("/", serveShell)
+	r.Get("/session/{id}", serveShell)
+	r.Get("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(staticDir, "manifest.json"))
+	})
+	r.Get("/share/{id}", serveShell)
 
 	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
 		if proxy.IsNative(r.URL.Path) {

@@ -57,6 +57,30 @@ func TestStaticIndexServesWithoutRedirect(t *testing.T) {
 	}
 }
 
+func TestRootAndSessionServeShell(t *testing.T) {
+	dir := fixtureStatic(t)
+	r := NewRouter(dir, nil)
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	// Python parity: app shell is served at "/" and "/session/{id}" so the
+	// base-href script resolves to origin root and "static/style.css" works.
+	for _, path := range []string{"/", "/session/89def10de01f"} {
+		resp, err := ts.Client().Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d", path, resp.StatusCode)
+		}
+		if !strings.Contains(string(body), "fixture") {
+			t.Fatalf("%s body = %q", path, body)
+		}
+	}
+}
+
 func TestHealthNative(t *testing.T) {
 	r := NewRouter(fixtureStatic(t), nil)
 	ts := httptest.NewServer(r)
@@ -145,9 +169,9 @@ func TestPanicRecoveryInsideHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	// "/" is not a native route and there is no proxy handler, so the router
-	// falls through to the catch-all 404. Panic recovery must still apply.
-	if resp.StatusCode != 404 {
+	// Root now serves the app shell, matching Python WebUI and enabling
+	// relative asset paths. Panic recovery middleware still wraps the route.
+	if resp.StatusCode != 200 {
 		t.Fatalf("root status = %d", resp.StatusCode)
 	}
 }
