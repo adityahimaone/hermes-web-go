@@ -6,6 +6,22 @@ removed.
 
 ## 1. Golden fixture harness (built in Phase 0, used through Phase 8)
 
+Phase 0 implementation: `tools/phase0_harness.py`. `record` accepts JSON journey plus local base URL; `compare` compares normalized exchanges. Each recorded row has redacted/normalized `request` data for comparison plus redacted, unnormalized `replay_request` operational data; replay uses only `replay_request`, so session IDs and POST bodies remain usable without storing secrets. `replay_request` is excluded from comparison. Normalization remains comparison-only. Authorization/cookie/API-key/password/token/secret/CSRF values redact even when embedded in arbitrary query/header/body strings. Session, stream, run, task, request IDs and timestamp fields normalize through one exchange-wide mapping; repeated relationships remain stable and inconsistent relationships fail. Volatile response headers such as `Date` drop while relevant headers remain. SSE response bodies parse into ordered `{event,data}` records. Replay preserves JSON bodies. Opaque `body_base64` requires explicit `body_base64_safe: true`; `body_fixture` requires a relative path under explicit fixture root and rejects absolute/traversal paths. Parent output directories are created. HTTP/transport errors fail closed: the run aborts with no fixture row rather than recording a partial parity result. Harness never fabricates model output.
+
+```bash
+python3 tools/phase0_lifecycle.py --source /path/to/hermes-webui-personal \
+  --python /tmp/hermes-webui-phase0-venv/bin/python --journey testdata/phase0-safe-journey.json \
+  --output-dir /tmp/hermes-phase0-run
+```
+
+The checked-in journey is intentionally safe and declarative: exactly 3 read-only GET exchanges (`/health`, `/api/sessions`, and `/api/workspaces`); no mutations, provider traffic, credentials, or fixture file reads. Output uses a unique `run-*` subdirectory when requested directory is non-empty. Lifecycle roots are removed by default after each run; pass `retain_roots=True` only for explicit manual review. Harness never fabricates model output.
+
+Live result (2026-09-02): `tools/phase0_lifecycle.py` passed fresh A/B comparison with exactly 3 bounded GET exchanges against unmodified `hermes-webui-personal`, using `/tmp/hermes-webui-phase0-venv`, distinct temporary state/home/workspace roots, and workspace substitution. This 3-GET route set captures no session ID (its responses carry no scalar session_id), so no ID remapping was exercised in this run. No provider chat was run in this lifecycle; safe repeatability was not established, so no chat parity claim is made. Comparative audit: `hermes-web-studio` was inspected read-only via CodeGraph; its Go `Handler` routes differ from primary parity source `hermes-webui-personal/api/routes.py`, so no routes were merged into this inventory.
+
+`tools/generate_route_inventory.py` regenerates `testdata/route-inventory.json` from primary source. `/share`, `/api/gateway/start`, `/api/gateway/stop`, and `/api/gateway/restart` are included.
+
+No checked-in provider fixture is claimed: provider availability, credentials, model output, and approval/tool execution are deployment-specific. Real traffic belongs in disposable temporary Hermes workspace/session with safe no-tool prompt; inspect redacted fixture before use.
+
 - Script a realistic set of user journeys against the **existing, unmodified Python server**:
   - New session → send chat message → observe SSE stream → approval triggered → respond →
     upload a file → browse workspace → open a file → view crons/skills/memory panels →

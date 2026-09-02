@@ -1,5 +1,11 @@
 # 02 — API Parity Mapping (the literal 1:1 contract)
 
+## Phase 0 audit evidence (2026-09-02)
+
+Route dispatch uses `api.routes.handle_get`, `handle_post`, `handle_patch`, `handle_delete`, and `handle_put`; it is not decorator-based. Reproducible extracted inventory: `testdata/route-inventory.json`, generated from the read-only fork's `api/routes.py`.
+
+Actual dispatch-literal counts: GET 105, POST 139, PATCH 2, DELETE 3, PUT 1 (250 total; prefix routes count once per method). Inventory includes fork-specific Kanban dispatch, wiki/knowledge, notes, MCP, project/dashboard, remote workspace/file escape routes, profile/provider/plugin management, and gateway/session event streams. JSON inventory is source evidence; stable rows below are not exhaustive until Phase 1 imports inventory.
+
 This is the authoritative "must reproduce exactly" list. Treat it like the original project's
 own `ARCHITECTURE.md` §18 (Endpoint Reference): **living document, update it the moment you
 learn your fork differs from what's below.** Everything here was reconstructed from the public

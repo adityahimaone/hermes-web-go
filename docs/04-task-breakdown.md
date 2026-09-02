@@ -5,21 +5,14 @@ Work top-to-bottom. Do not start a phase's tasks until the previous phase's exit
 
 ## Phase 0 — Audit & harness
 
-- [ ] Clone the Hermes WebUI fork, read `ARCHITECTURE.md` (or equivalent) if the
-      fork has one; if not, this plan's `02-api-parity-mapping.md` is the closest substitute —
-      reconcile it against actual source.
-- [ ] Enumerate every route in `server.py`/`api/routes.py` (`grep` for the routing dispatch);
-      diff against `02-api-parity-mapping.md`; add missing rows (especially fork-specific:
-      kanban, remote SSH, evomem).
-- [ ] Stand up a "record traffic" harness: run the existing Python server, drive it through a
-      scripted set of realistic sessions (new session → chat → upload → approval → file browse →
-      cron view → delete session), record full HTTP request/response pairs (and SSE event
-      sequences) as golden fixtures.
-- [ ] Confirm the golden fixtures are deterministic enough to replay (mask/normalize timestamps,
-      session_ids, etc. in the comparison logic, not in the fixtures themselves).
-- [ ] Decide + document (in `01-architecture-design.md` if it changes): does the fork already
-      support gateway-mode chat (`HERMES_WEBUI_CHAT_BACKEND=gateway`, `HERMES_API_URL`), or is the
-      "agent shim" fallback needed? This decision gates all of Phase 4.
+Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `tools/phase0_lifecycle.py`, and tests. Checked-in safe journey covers exactly 3 read-only GET exchanges (`/health`, `/api/sessions`, `/api/workspaces`) against two fresh isolated source-server processes; it does not test mutations. Provider-chat coverage remains **open**: no chat exchange was included because safe repeatability for provider side effects was not established; Phase 0 makes no provider-chat parity claim. Tests never run provider traffic automatically. Normalization remains comparison-only; `replay_request` preserves redacted operational request values for replay.
+
+- [x] Clone the Hermes WebUI fork, read `ARCHITECTURE.md` (or equivalent), reconcile against actual source.
+- [x] Enumerate every route; inventory saved in `testdata/route-inventory.json`, including fork-specific Kanban, workspace escape, wiki/knowledge, notes, MCP, gateway/session-event routes.
+- [x] Add bounded `tools/phase0_harness.py` record/replay/compare harness. Full live journey blocked because source dependencies are unavailable (`yaml`), so no provider fixture is fabricated.
+- [x] Confirm deterministic replay normalization with unit tests: mask secrets and normalize timestamps, session IDs, stream IDs, and related volatile fields in comparison logic; preserve arbitrary content.
+- [ ] Provider-chat coverage: establish safe repeatability and parity fixture, or explicitly defer to Phase 4. No parity claim until then.
+- [x] Decide + document: default is in-process `AIAgent`; gateway mode is explicit opt-in; Phase 4 needs agent-shim fallback unless gateway contract is separately validated.
 
 ## Phase 1 — Skeleton + proxy (pure plumbing, zero behavior change)
 
