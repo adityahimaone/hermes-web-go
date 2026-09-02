@@ -18,6 +18,7 @@ This file is the entry point. Detailed instructions live alongside this file:
 | [`05-migration-strategy.md`](05-migration-strategy.md) | How to run Go + Python side-by-side safely (strangler-fig proxy), rollback plan |
 | [`06-testing-and-parity.md`](06-testing-and-parity.md) | How we prove 1:1 parity before flipping traffic, regression gates |
 | [`07-future-vite-frontend.md`](07-future-vite-frontend.md) | Deferred: frontend rewrite to Vite, only after backend is 100% Go |
+| [`08-kanban-board.md`](08-kanban-board.md) | Kanban/task-dispatch board — data model, dispatcher semantics, its own phase |
 
 ---
 
@@ -68,6 +69,9 @@ Full detail in `02-api-parity-mapping.md`. At a glance, the Go backend must repr
 - [ ] Same static file layout served from the same paths (`static/index.html`, `style.css`,
       `ui.js`, `workspace.js`, `sessions.js`, `messages.js`, `panels.js`, `commands.js`, `boot.js`) —
       Go changes **nothing** here in phase 1–6; it just serves the files.
+- [ ] The Kanban/task-dispatch board (boards, swimlanes-by-assignee, status columns, dispatcher
+      preview/run, bulk actions, archive, multi-tenant filtering) — a major module in its own
+      right, detailed in `docs/08-kanban-board.md`, not an afterthought under "panels".
 
 ## 3. High-level target shape (see `01-architecture-design.md` for full detail)
 
@@ -112,6 +116,7 @@ Browser ── HTTP/SSE ──▶  Go server (public port, e.g. 8787)
 | 4 | Chat + streaming | `/api/chat/start`, `/api/chat/stream`, `/api/chat` fallback — Go owns HTTP/SSE plumbing, delegates actual generation to the Hermes agent gateway |
 | 5 | Approvals | Full approval state machine in Go (replaces Python's module-level `_pending` dict) |
 | 6 | Panels | Crons, skills, memory (read + cron run/pause/resume/create) |
+| 6.5 | Kanban board | Task-dispatch board fully ported — see `docs/08-kanban-board.md`; own data model, dispatcher, wired into `agentclient` + approvals |
 | 7 | Auth + observability | Password auth, structured logging, `/health` parity, graceful shutdown |
 | 8 | Full cutover | Python process no longer started at all; Go is 100% of the backend; proxy code deleted |
 | 9 (future) | Frontend → Vite | Only starts after Phase 8 sign-off; see `07-future-vite-frontend.md` |

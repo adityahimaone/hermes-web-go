@@ -36,9 +36,12 @@ The MVP is done when all of the following are simultaneously true:
   sign-off (100% Go backend, Python process no longer started).
 - Authentication changes/hardening beyond parity — if the fork doesn't currently run with
   `HERMES_WEBUI_PASSWORD` set, don't add new auth requirements as part of MVP; port what exists.
-- Any new features (the personal fork's kanban/remote-SSH/evomem items get ported at parity, not
+- Any new features (the personal fork's remote-SSH/evomem items get ported at parity, not
   redesigned, during this migration — feature redesign is explicitly out of scope for a rewrite
-  whose stated goal is "more lightweight," not "different").
+  whose stated goal is "more lightweight," not "different"). Kanban is a partial exception: it's
+  substantial enough to have its own phase and doc (`docs/08-kanban-board.md`) rather than being
+  grouped under "port whatever else exists" — but the same rule applies: port at parity, don't
+  redesign the dispatcher/board semantics while rewriting the transport.
 
 ## Success metrics to track from day one
 
