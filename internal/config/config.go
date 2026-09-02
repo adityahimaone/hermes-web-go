@@ -16,6 +16,7 @@ type Config struct {
 	StaticDir      string
 	DataRoot       string
 	DatabasePath   string
+	StateDBPath    string
 }
 
 // Load reads configuration via getenv. An empty value falls back to the default.
@@ -26,6 +27,7 @@ func Load(getenv func(string) string) (Config, error) {
 		LegacyProxyURL: getenv("HERMES_WEBUI_LEGACY_PROXY_URL"),
 		DataRoot:       getenv("HERMES_WEBUI_DATA_ROOT"),
 		DatabasePath:   getenv("HERMES_WEBUI_DATABASE_PATH"),
+		StateDBPath:    getenv("HERMES_WEBUI_STATE_DB_PATH"),
 	}
 	if c.Host == "" {
 		c.Host = "127.0.0.1"
@@ -42,6 +44,13 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.DatabasePath == "" {
 		c.DatabasePath = filepath.Join(c.DataRoot, "webui.db")
+	}
+	if c.StateDBPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("home directory: %w", err)
+		}
+		c.StateDBPath = filepath.Join(home, ".hermes", "state.db")
 	}
 	portStr := getenv("HERMES_WEBUI_PORT")
 	if portStr == "" {

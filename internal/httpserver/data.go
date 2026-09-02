@@ -86,21 +86,28 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			writeError(w, http.StatusInternalServerError, "failed to load session")
 			return
 		}
+		title := row.Title
+		if strings.HasPrefix(title, "Reply ") {
+			title = title[len("Reply "):]
+		}
 		messages := row.Messages
 		if req.URL.Query().Get("messages") == "0" {
 			messages = "[]"
 		}
 		writeJSON(w, map[string]any{
-			"session_id": row.ID,
-			"title":      row.Title,
-			"workspace":  row.Workspace,
-			"model":      row.Model,
-			"created_at": row.CreatedAt,
-			"updated_at": row.UpdatedAt,
-			"pinned":     row.Pinned,
-			"archived":   row.Archived,
-			"project_id": row.ProjectID,
-			"messages":   json.RawMessage(messages),
+			"session": map[string]any{
+				"session_id":    row.ID,
+				"title":         title,
+				"workspace":     row.Workspace,
+				"model":         row.Model,
+				"created_at":    row.CreatedAt,
+				"updated_at":    row.UpdatedAt,
+				"pinned":        row.Pinned,
+				"archived":      row.Archived,
+				"project_id":    row.ProjectID,
+				"message_count": messageCount(row.Messages),
+				"messages":      json.RawMessage(messages),
+			},
 		})
 	})
 
@@ -273,9 +280,13 @@ func pageParams(req *http.Request) (limit, offset int) {
 }
 
 func sessionListItem(row store.SessionRow) map[string]any {
+	title := row.Title
+	if strings.HasPrefix(title, "Reply ") {
+		title = title[len("Reply "):]
+	}
 	return map[string]any{
 		"session_id":    row.ID,
-		"title":         row.Title,
+		"title":         title,
 		"workspace":     row.Workspace,
 		"model":         row.Model,
 		"created_at":    row.CreatedAt,
@@ -299,7 +310,19 @@ func sessionSearchItem(row store.SessionRow, matchType, preview string) map[stri
 }
 
 func messageCount(messages string) int {
-	return strings.Count(messages, `"role"`)
+	var items []struct {
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal([]byte(messages), &items); err != nil {
+		return 0
+	}
+	count := 0
+	for _, item := range items {
+		if item.Role == "user" {
+			count++
+		}
+	}
+	return count
 }
 
 func searchPreview(messages, q string) string {

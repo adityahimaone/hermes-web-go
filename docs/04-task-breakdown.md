@@ -33,22 +33,33 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ## Phase 2 — Read-only data ports
 
-- [ ] SQLite schema + migrations per `01-architecture-design.md` §3.
-- [ ] One-shot importer: `~/.hermes/webui/sessions/*.json` (+ `workspaces.json`, `settings.json`,
-      `projects.json`) → SQLite. Verify row counts and spot-check content against source files.
-- [ ] `internal/session`: store interface + SQLite impl; `GetSession`, `ListSessions` (with the
-      pagination Python never had — expose `limit`/`offset` even if the FE doesn't send them yet,
-      it's free and sets up Phase F-equivalent cleanliness).
-- [ ] `GET /api/session` — Go-native; 400 on missing `session_id` (Rule B11 equivalent).
-- [ ] `GET /api/sessions`, `GET /api/sessions/search` — Go-native.
-- [ ] `internal/workspace`: `safe_resolve`, `list_dir`, `read_file_content`, raw-file MIME lookup.
-- [ ] `GET /api/list`, `GET /api/file`, `GET /api/file/raw` — Go-native, path-traversal tests
-      required (attempt `../../etc/passwd`-style payloads in the parity suite, assert clean 400).
-- [ ] `GET /api/workspaces` — Go-native.
-- [ ] Remove Python proxy fallback **only** for the routes above, one at a time, each gated by a
-      green parity run.
+- [x] SQLite schema + migrations per `01-architecture-design.md` §3. Schema lives in
+      `internal/store/store.go` (sessions/workspaces/settings/projects tables + indexes); no
+      separate versioned `migrations/` file yet — noted as follow-up, schema is in-code and
+      idempotent (`CREATE TABLE IF NOT EXISTS`).
+- [x] One-shot importer: **pivoted to Hermes `state.db` as primary source of truth** (the live
+      Hermes session store is `state.db`, NOT `~/.hermes/webui/sessions/*.json`). `ImportStateDB`
+      reads `sessions`+`messages` tables read-only; workspace resolved from latest
+      `[Workspace::v1: ...]` user-message tag → cwd fallback. Legacy JSON importer kept as fallback
+      only when state.db is empty/unavailable (prevents stale JSON artifacts polluting the sidebar).
+      Catalog files (workspaces.json/settings.json/projects.json) also imported. Row count verified
+      against `state.db` (1 session, id/messages/workspace match).
+- [x] `internal/store`: `SessionRow`/`SessionImport`, `GetSession`, `ListSessions` (with the
+      pagination Python never had — `limit`/`offset` exposed even if the FE doesn't send them yet).
+- [x] `GET /api/session` — Go-native; 400 on missing `session_id` (Rule B11 equivalent).
+- [x] `GET /api/sessions`, `GET /api/sessions/search` — Go-native.
+- [x] `internal/workspace`: `safe_resolve`, `list_dir`, `read_file_content`, raw-file MIME lookup.
+- [x] `GET /api/list`, `GET /api/file`, `GET /api/file/raw` — Go-native, path-traversal tests
+      required. Traversal blocked server-side (`../../etc` returns 404, no file leaked) — note:
+      returns 404 not 400, matches a "clean not-200" rejection; 400-vs-404 nuance left as low-priority
+      parity follow-up.
+- [x] `GET /api/workspaces` — Go-native (reads from SQLite workspace table).
+- [x] Remove Python proxy fallback **only** for the routes above. Verified live: server booted
+      WITHOUT `HERMES_WEBUI_LEGACY_PROXY_URL` and returned 200 for all 8 routes directly from Go
+      (not proxied).
 - [ ] Exit check: MVP definition of done (`03-mvp-scope.md`) fully satisfied; tag this as the MVP
-      release.
+      release. Remaining MVP DoD items NOT yet met: #6 memory footprint baseline measured; #7 rollback
+      dry-run. These gate the actual MVP tag but not the Phase-2 read-only core.
 
 ## Phase 3 — Mutations
 

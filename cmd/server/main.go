@@ -33,7 +33,6 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 	}
 
 	var db *sql.DB
-	dataRoot := cfg.DataRoot
 	dbPath := cfg.DatabasePath
 	if dbPath != "" {
 		opened, err := store.Open(dbPath)
@@ -42,12 +41,24 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 		} else {
 			db = opened
 			defer db.Close()
-			importDir := filepath.Join(dataRoot, "sessions")
-			n, ierr := data.ImportSessions(db, importDir)
-			if ierr != nil && !errors.Is(ierr, os.ErrNotExist) {
-				log.Printf("store: import %s: %v", importDir, ierr)
-			} else if ierr == nil {
-				log.Printf("store: imported %d sessions from %s", n, importDir)
+
+			// Import from Hermes state.db (primary source of truth).
+			stateCount, stateErr := importFromStateDB(db, cfg.StateDBPath)
+			if stateErr != nil {
+				log.Printf("store: state.db import: %v", stateErr)
+			}
+
+			// Fall back to legacy JSON only when state.db has no usable sessions.
+			// This prevents stale JSON artifacts from polluting the live sidebar.
+			dataRoot := cfg.DataRoot
+			if stateErr != nil || stateCount == 0 {
+				importDir := filepath.Join(dataRoot, "sessions")
+				n, ierr := data.ImportSessions(db, importDir)
+				if ierr != nil && !errors.Is(ierr, os.ErrNotExist) {
+					log.Printf("store: json import %s: %v", importDir, ierr)
+				} else if ierr == nil {
+					log.Printf("store: json-imported %d sessions from %s", n, importDir)
+				}
 			}
 			if cerr := data.ImportCatalog(db, dataRoot); cerr != nil {
 				log.Printf("store: import catalog: %v", cerr)
@@ -57,7 +68,7 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 
 	srv := &http.Server{
 		Addr:    cfg.Host + ":" + strconv.Itoa(cfg.Port),
-		Handler: httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, dataRoot),
+		Handler: httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot),
 	}
 
 	errCh := make(chan error, 1)
@@ -82,6 +93,22 @@ func run(cfg config.Config, stop <-chan struct{}) error {
 	return nil
 }
 
+// importFromStateDB opens Hermes state.db and imports sessions+messages.
+// It returns the number of sessions imported.
+func importFromStateDB(dst *sql.DB, path string) (int, error) {
+	src, err := data.OpenStateDB(path)
+	if err != nil {
+		return 0, err
+	}
+	defer src.Close()
+	n, err := data.ImportStateDB(dst, src)
+	if err != nil {
+		return 0, err
+	}
+	log.Printf("store: imported %d sessions from %s", n, path)
+	return n, nil
+}
+
 func main() {
 	cfg, err := config.FromEnv()
 	if err != nil {
@@ -98,7 +125,6 @@ func main() {
 	}()
 
 	if err := run(cfg, stop); err != nil {
-		log.Printf("server: %v", err)
-		os.Exit(1)
+		log.Fatalf("server: %v", err)
 	}
 }
