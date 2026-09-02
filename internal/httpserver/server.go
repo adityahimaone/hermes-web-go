@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +15,38 @@ import (
 	"hermes-web-go/internal/proxy"
 	"hermes-web-go/internal/stream"
 )
+
+// routerOpt is a functional option for NewRouterWithAgent.
+type routerOpt struct {
+	hermesHome string
+}
+
+// RouterOption mutates router construction options.
+type RouterOption func(*routerOpt)
+
+// WithHermesHome pins the Hermes home directory used to resolve cron/skills
+// file state. Defaults to $HOME/.hermes when unset.
+func WithHermesHome(home string) RouterOption {
+	return func(o *routerOpt) { o.hermesHome = home }
+}
+
+func defaultHermesHome() string {
+	if home := os.Getenv("HERMES_HOME"); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".hermes")
+}
+
+func routerHermesHome(o routerOpt) string {
+	if o.hermesHome != "" {
+		return o.hermesHome
+	}
+	return defaultHermesHome()
+}
 
 // NewRouter builds the full HTTP handler: recovery + logging middleware,
 // native /health, byte-identical static serving under /static/*, and a
@@ -26,7 +59,12 @@ func NewRouter(staticDir string, proxyHandler http.Handler) http.Handler {
 // NewRouterWithAgent adds native chat routes to the data-enabled router.
 // Callers pass the agent transport explicitly so tests can use a deterministic
 // fake and production can select the configured runner client.
-func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, client agentclient.AgentClient, st *approval.Store) http.Handler {
+func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, client agentclient.AgentClient, st *approval.Store, opts ...RouterOption) http.Handler {
+	var o routerOpt
+	for _, fn := range opts {
+		fn(&o)
+	}
+
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
@@ -41,13 +79,18 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	if st != nil {
 		ApprovalRouter(r, st)
 	}
+	CronsRouter(r, routerHermesHome(o))
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r
 }
 
 // NewRouterWithData is NewRouter plus the Phase 2 read-only data routes. When
 // db is nil the data routes return 503 (proxy-only mode).
-func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string) http.Handler {
+func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, dataRoot string, opts ...RouterOption) http.Handler {
+	var o routerOpt
+	for _, fn := range opts {
+		fn(&o)
+	}
 	r := chi.NewRouter()
 	r.Use(Recover)
 	r.Use(Logging)
@@ -61,6 +104,8 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	if db != nil {
 		DataRouter(r, db, dataRoot)
 	}
+
+	CronsRouter(r, routerHermesHome(o))
 
 	mountStaticAndProxy(r, staticDir, proxyHandler)
 	return r
