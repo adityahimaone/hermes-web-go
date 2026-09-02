@@ -136,14 +136,18 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ## Phase 5 — Approvals
 
-- [ ] `internal/approval`: `ApprovalStore` per `01-architecture-design.md` §5.
-- [ ] `GET /api/approval/pending`, `POST /api/approval/respond`.
+- [x] `internal/approval`: `ApprovalStore` per `01-architecture-design.md` §5. Evidence:
+      `internal/approval/store_test.go` (queue semantics, session/always/deny, invalid choice).
+- [x] `GET /api/approval/pending`, `POST /api/approval/respond`. Evidence:
+      `internal/httpserver/approval_test.go` (invalid choice 400, missing session 400,
+      submit→pending→respond→session approval→queue cleared).
 - [ ] Wire approval surfacing into the `tool` SSE event path (approval appears within the same
       stream immediately after the triggering tool call, not only via polling).
 - [ ] Permanent-allowlist persistence (SQLite instead of Python's flat file) + import any existing
       allowlist during the Phase 2 importer (retroactively, or as an add-on migration step here).
-- [ ] Rule #9 test: multi-pattern approval, assert all `pattern_keys` get approved, not just the
-      first.
+- [x] Rule #9 test: multi-pattern approval, assert all `pattern_keys` get approved, not just the
+      first. Evidence: `TestApprovalStoreAlwaysPersistsAllPatternKeys` (always) and
+      `TestApprovalStoreQueueAndChoices` (session) iterate `PatternKeys`.
 - [ ] Remove proxy fallback for approval routes once green.
 
 ## Phase 6 — Panels (crons, skills, memory)
