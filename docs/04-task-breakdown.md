@@ -172,13 +172,16 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       Partial: GET list/output are native and live-verified (12 jobs from real `~/.hermes/cron/jobs.json`);
       POST mutations remain proxy-backed until an agent-side scheduler seam exists.
       Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`.
-- [ ] `internal/skillsmem`: read `SKILL.md` files / skill registry, `MEMORY.md`/`USER.md`/`SOUL.md`.
-      Partial: native read package supports frontmatter skill discovery, nested skill lookup, and
-      memory files; agent-specific external skill namespaces/config redaction remain open.
-- [ ] `GET /api/skills`, `/api/skills/content`, `/api/memory`.
-      Partial: all three GET routes are native and live-verified; `TestSkillsListRoute`,
-      `TestSkillsContentRoute`, `TestMemoryRoute`, plus traversal/missing-skill checks.
-- [ ] Remove proxy fallback once green.
+- [x] `internal/skillsmem`: read `SKILL.md` files / skill registry, `MEMORY.md`/`USER.md`/`SOUL.md`.
+      Native package supports frontmatter discovery, nested lookup, `.usage.json` telemetry,
+      configured `skills.external_dirs`, and memory files. External paths expand `~`/`${VAR}`,
+      resolve relative to HERMES_HOME, skip duplicates/local root, and keep traversal checks.
+- [x] `GET /api/skills`, `/api/skills/content`, `/api/skills/usage`, `/api/memory`.
+      Native and tested: `TestSkillsListRoute`, `TestSkillsUsageRoute`, `TestSkillsContentRoute`,
+      `TestMemoryRoute`, plus traversal/missing-skill checks.
+      Cron mutation routes remain proxy-backed: scheduler owns jobs.json writes and exposes no
+      agent-side mutation seam; Go does not reimplement scheduler logic.
+- [ ] Remove proxy fallback once cron mutation seam and remaining route inventory are green.
 
 ## Phase 7 — Auth + observability
 

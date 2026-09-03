@@ -25,6 +25,28 @@ func TestListSkillsParsesFrontmatter(t *testing.T) {
 	}
 }
 
+func TestListSkillsIncludesConfiguredExternalDir(t *testing.T) {
+	home := t.TempDir()
+	external := filepath.Join(home, "external-skills")
+	dir := filepath.Join(external, "external-demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("skills:\n  external_dirs:\n    - external-skills\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: external-demo\ndescription: External\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := ListSkills(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 || skills[0]["name"] != "external-demo" {
+		t.Fatalf("skills = %#v", skills)
+	}
+}
+
 func TestSkillContentRejectsTraversal(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, "skills", "demo")

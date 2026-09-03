@@ -24,56 +24,116 @@ var excludedDirNames = map[string]bool{
 	".git": true, "__pycache__": true, "node_modules": true, ".venv": true, "venv": true,
 }
 
-// ListSkills walks <home>/skills for SKILL.md files and returns their
-// frontmatter-derived name/description, with category from the relative path
-// and duplicate names collapsed (first wins).
+// ListSkills walks each skills root (<home>/skills plus any configured
+// skills.external_dirs) for SKILL.md files and returns their frontmatter-
+// derived name/description, with category from the relative path and
+// duplicate names collapsed (first wins).
 func ListSkills(home string) ([]map[string]any, error) {
-	root := filepath.Join(home, "skills")
 	var skills []map[string]any
 	seen := make(map[string]bool)
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+	for _, root := range skillRoots(home) {
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() && excludedDirNames[d.Name()] {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || d.Name() != "SKILL.md" {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			meta := parseFrontmatter(string(content))
+			name := meta["name"]
+			if name == "" {
+				name = filepath.Base(filepath.Dir(path))
+			}
+			if name == "" || seen[name] {
+				return nil
+			}
+			description := meta["description"]
+			if description == "" {
+				description = firstBodyLine(string(content))
+			}
+			if len(description) > maxDescription {
+				description = description[:maxDescription-3] + "..."
+			}
+			seen[name] = true
+			rel, _ := filepath.Rel(root, filepath.Dir(path))
+			skills = append(skills, map[string]any{
+				"name":        name,
+				"description": description,
+				"category":    categoryFor(rel),
+				"disabled":    false,
+			})
 			return nil
-		}
-		if d.IsDir() && excludedDirNames[d.Name()] {
-			return filepath.SkipDir
-		}
-		if d.IsDir() || d.Name() != "SKILL.md" {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		meta := parseFrontmatter(string(content))
-		name := meta["name"]
-		if name == "" {
-			name = filepath.Base(filepath.Dir(path))
-		}
-		if name == "" || seen[name] {
-			return nil
-		}
-		description := meta["description"]
-		if description == "" {
-			description = firstBodyLine(string(content))
-		}
-		if len(description) > maxDescription {
-			description = description[:maxDescription-3] + "..."
-		}
-		seen[name] = true
-		rel, _ := filepath.Rel(root, filepath.Dir(path))
-		skills = append(skills, map[string]any{
-			"name":        name,
-			"description": description,
-			"category":    categoryFor(rel),
-			"disabled":    false,
 		})
-		return nil
-	})
+	}
 	sort.Slice(skills, func(i, j int) bool {
 		return skills[i]["name"].(string) < skills[j]["name"].(string)
 	})
 	return skills, nil
+}
+
+// skillRoots returns <home>/skills plus any skills.external_dirs entries from
+// <home>/config.yaml, mirroring agent.skill_utils.get_external_skills_dirs:
+// ~ and ${VAR} expanded, relative entries resolved against home, duplicates
+// and the local root skipped, only existing directories kept. A missing or
+// malformed config yields just the local root.
+func skillRoots(home string) []string {
+	local, _ := filepath.Abs(filepath.Join(home, "skills"))
+	roots := []string{local}
+	raw, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if err != nil {
+		return roots
+	}
+	seen := map[string]bool{local: true}
+	inSkills, inExternal := false, false
+	for _, line := range strings.Split(string(raw), "\n") {
+		indent := len(line) - len(strings.TrimLeft(line, " 	"))
+		trim := strings.TrimSpace(line)
+		if indent == 0 {
+			inSkills, inExternal = false, false
+			if trim == "skills:" {
+				inSkills = true
+			}
+			continue
+		}
+		if inSkills && trim == "external_dirs:" {
+			inExternal = true
+			continue
+		}
+		if !inExternal || !strings.HasPrefix(trim, "-") {
+			if inExternal && !strings.HasPrefix(trim, "-") {
+				inExternal = false
+			}
+			continue
+		}
+		entry := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trim, "-")), `"'`)
+		if entry == "" {
+			continue
+		}
+		entry = os.ExpandEnv(entry)
+		if strings.HasPrefix(entry, "~/") {
+			if h, err := os.UserHomeDir(); err == nil {
+				entry = filepath.Join(h, entry[2:])
+			}
+		} else if !filepath.IsAbs(entry) {
+			entry = filepath.Join(home, entry)
+		}
+		path, err := filepath.Abs(entry)
+		if err != nil || path == local || seen[path] {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			seen[path] = true
+			roots = append(roots, path)
+		}
+	}
+	return roots
 }
 
 // categoryFor returns the top path segment for nested skills, empty for flat.
@@ -137,25 +197,31 @@ func SkillContent(home, name string) (map[string]any, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		return nil, ErrInvalidSkillName
 	}
-	root := filepath.Join(home, "skills")
+	roots := skillRoots(home)
+	root := roots[0]
 	path := filepath.Join(root, name, "SKILL.md")
 	if _, err := os.Stat(path); err != nil {
 		path = ""
-		_ = filepath.WalkDir(root, func(candidate string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil || path != "" {
-				return nil
-			}
-			if d.IsDir() && excludedDirNames[d.Name()] {
-				return filepath.SkipDir
-			}
-			if !d.IsDir() && d.Name() == "SKILL.md" {
-				content, err := os.ReadFile(candidate)
-				if err == nil && parseFrontmatter(string(content))["name"] == name {
-					path = candidate
+		for _, searchRoot := range roots {
+			_ = filepath.WalkDir(searchRoot, func(candidate string, d os.DirEntry, walkErr error) error {
+				if walkErr != nil || path != "" {
+					return nil
 				}
+				if d.IsDir() && excludedDirNames[d.Name()] {
+					return filepath.SkipDir
+				}
+				if !d.IsDir() && d.Name() == "SKILL.md" {
+					content, err := os.ReadFile(candidate)
+					if err == nil && parseFrontmatter(string(content))["name"] == name {
+						path = candidate
+					}
+				}
+				return nil
+			})
+			if path != "" {
+				break
 			}
-			return nil
-		})
+		}
 	}
 	if path == "" {
 		return nil, os.ErrNotExist
