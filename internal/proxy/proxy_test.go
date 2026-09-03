@@ -13,6 +13,12 @@ func TestIsNative(t *testing.T) {
 	if !IsNative("/health") {
 		t.Fatal("/health should be native")
 	}
+	if !IsNativeMethod(http.MethodGet, "/health") {
+		t.Fatal("GET /health should be native")
+	}
+	if IsNativeMethod(http.MethodPost, "/health") {
+		t.Fatal("POST /health must remain proxy-owned")
+	}
 	for _, p := range []string{"/static/index.html", "/", "/api/chat", "/api/chat/start"} {
 		if IsNative(p) {
 			t.Fatalf("%q should not be native", p)
@@ -114,3 +120,26 @@ func TestProxyPreservesMultipleQueryValues(t *testing.T) {
 		t.Fatalf("uri = %q, want %q", backend.gotURI, want)
 	}
 }
+
+func TestRegistryResolvesMethodAndReadiness(t *testing.T) {
+	ready := true
+	registry := NewRegistry(map[Key]Owner{
+		{Method: http.MethodGet, Pattern: "/api/example"}: readyOwner{ready: &ready},
+	})
+
+	if _, ok := registry.Resolve(http.MethodGet, "/api/example"); !ok {
+		t.Fatal("ready GET owner not resolved")
+	}
+	if _, ok := registry.Resolve(http.MethodPost, "/api/example"); ok {
+		t.Fatal("POST must not inherit GET ownership")
+	}
+	ready = false
+	if _, ok := registry.Resolve(http.MethodGet, "/api/example"); ok {
+		t.Fatal("unready owner must fall through")
+	}
+}
+
+type readyOwner struct{ ready *bool }
+
+func (o readyOwner) Ready() bool                                  { return *o.ready }
+func (o readyOwner) ServeHTTP(http.ResponseWriter, *http.Request) {}

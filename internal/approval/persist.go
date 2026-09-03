@@ -3,6 +3,7 @@ package approval
 import (
 	"database/sql"
 	"encoding/json"
+	"sort"
 )
 
 const permanentSettingsKey = "approval_permanent"
@@ -41,6 +42,7 @@ func (p *SQLitePersistence) SavePermanent(keys []string) error {
 	for k := range seen {
 		merged = append(merged, k)
 	}
+	sort.Strings(merged)
 	b, err := json.Marshal(merged)
 	if err != nil {
 		return err

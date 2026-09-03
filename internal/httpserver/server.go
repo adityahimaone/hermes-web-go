@@ -211,7 +211,7 @@ func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handl
 			http.NotFound(w, r)
 			return
 		}
-		if proxy.IsNative(r.URL.Path) {
+		if proxy.IsNativeMethod(r.Method, r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}
