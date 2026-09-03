@@ -110,14 +110,22 @@ func SaveFile(root, rel string, data []byte) error {
 	if info.IsDir() {
 		return errors.New("cannot save: path is a directory")
 	}
+	// Python /api/file/save enforces the same 400,000-byte text cap as reads.
+	if len(data) > 400_000 {
+		return errors.New("file too large (max 400000 bytes)")
+	}
 	return os.WriteFile(target, data, info.Mode().Perm())
 }
 
-// CreateFile creates a new regular file under root without overwriting.
+// CreateFile creates a new regular file under root without overwriting,
+// enforcing the same 400,000-byte text cap as save/read.
 func CreateFile(root, rel string, data []byte) error {
 	target, err := SafeResolve(root, rel)
 	if err != nil {
 		return err
+	}
+	if len(data) > 400_000 {
+		return errors.New("file too large (max 400000 bytes)")
 	}
 	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -145,6 +153,26 @@ func DeleteFile(root, rel string) error {
 		return errors.New("cannot delete directory")
 	}
 	return os.Remove(target)
+}
+
+// DeleteRecursive removes a file or directory tree under root, never a
+// symlink (Python /api/file/delete supports recursive=true for directories).
+func DeleteRecursive(root, rel string) error {
+	target, err := SafeResolve(root, rel)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("cannot delete symlinked entry")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Entry mirrors the workspace directory-entry fields the browser consumes.

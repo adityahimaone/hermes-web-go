@@ -12,7 +12,12 @@ func TestSessionListItemMatchesPythonSidebarSemantics(t *testing.T) {
 	if item["title"] != "SMOKE_OK" {
 		t.Fatalf("title = %v, want SMOKE_OK", item["title"])
 	}
-	if item["message_count"] != 1 {
-		t.Fatalf("message_count = %v, want 1 user message", item["message_count"])
+	// Python compact(): message_count = len(messages) (all roles),
+	// user_message_count = count(role == "user").
+	if item["message_count"] != 2 {
+		t.Fatalf("message_count = %v, want 2 all-message count", item["message_count"])
+	}
+	if item["user_message_count"] != 1 {
+		t.Fatalf("user_message_count = %v, want 1 user message", item["user_message_count"])
 	}
 }

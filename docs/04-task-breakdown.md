@@ -75,6 +75,25 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] `POST /api/upload`, `/api/file/save`, `/api/file/create`, `/api/file/delete`.
       Strict traversal/symlink protection covered in workspace and HTTP tests.
 - [x] `GET /api/session/export` with `Content-Disposition: attachment` parity.
+      **Phase-D parity (2026-09-03):** filename now matches Python
+      `hermes-{sid}.json`; export includes `user_message_count`.
+      Evidence: `TestSessionExportAttachment`.
+- [x] **Phase-D session DTO parity (2026-09-03):** `message_count` counts ALL
+      messages (len) and `user_message_count` counts role==user, matching
+      Python `Session.compact()`. Evidence: `TestSessionListItemMatchesPythonSidebarSemantics`
+      (message_count=2, user_message_count=1 with one each); `TestSessionUpdateMutation`
+      extended for bool `pinned`/`archived` decode.
+- [x] **Phase-D file parity (2026-09-03):** text read/save/create cap now
+      exactly 400,000 bytes (Python `api/config.py`); `/api/file/save` returns
+      `{ok, path, size}`; `/api/file/delete?recursive` supported via
+      `workspace.DeleteRecursive`; `/api/file/raw` honors `?download=1`,
+      `?inline=1`, force-attachment for dangerous MIME types, and CSP sandbox
+      for inline HTML. Evidence: `TestFileOpsEnforce400KCap`,
+      `TestFileMutations`.
+- [x] **Phase-D workspace parity (2026-09-03):** `/api/workspaces` returns
+      persisted `last` (from `last_workspace.txt`) + `terminal_remote_backend`;
+      add/remove/rename return the complete updated `workspaces` list matching
+      Python. Evidence: `TestNativeWorkspacesFromDB` (last + flag shape).
 - [x] Remove proxy fallback for these routes once green; registry marks all Phase 3 routes native.
       Verification: `go test ./...`, `go test ./... -race`, and `go vet ./...` pass (2026-09-02).
 
@@ -208,6 +227,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] `POST /api/auth/login`; `GET /api/auth/status`; middleware gate on all API routes when
       `HERMES_WEBUI_PASSWORD` is set. Evidence: `TestAuthLoginAndGate`, `TestAuthStatusRoute`.
 - [x] `/health` final shape: `status`, `active_streams`, `uptime_seconds`.
+      **Phase-D parity (2026-09-03):** full contract now matches Python —
+      `sessions`, `active_runs`, `runs`, `last_run_finished_at`,
+      `server_started_at`, float `uptime_seconds`, `accept_loop`, optional
+      `checks` on `?deep=1`, and `503` on degraded. Evidence:
+      `internal/httpserver/server.go::Health`, `TestProxyWiring` (200 shape).
 - [x] Structured JSON request logging finalized (`ts`, `method`, `path`, `status`, `ms`).
       Evidence: `TestLoggingJSON`.
 - [x] Graceful shutdown drains in-flight HTTP requests with 5-second timeout; `ctl.sh stop` sends

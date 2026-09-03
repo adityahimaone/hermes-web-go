@@ -50,6 +50,35 @@ func TestListDirAndReadFile(t *testing.T) {
 	}
 }
 
+func TestFileOpsEnforce400KCap(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), make([]byte, 400_001), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFile(root, "big.txt", 400_000); err == nil {
+		t.Fatal("read over cap accepted")
+	}
+	if err := SaveFile(root, "big.txt", make([]byte, 400_001)); err == nil {
+		t.Fatal("save over cap accepted")
+	}
+	if err := CreateFile(root, "newbig.txt", make([]byte, 400_001)); err == nil {
+		t.Fatal("create over cap accepted")
+	}
+	// Recursive delete of a directory tree works and stays anchored.
+	if err := os.MkdirAll(filepath.Join(root, "d", "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "d", "sub", "f.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteRecursive(root, "d"); err != nil {
+		t.Fatalf("recursive delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "d")); !os.IsNotExist(err) {
+		t.Fatal("directory still exists after recursive delete")
+	}
+}
+
 func TestSaveFileRejectsSymlinkAndTraversal(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

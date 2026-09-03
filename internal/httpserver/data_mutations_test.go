@@ -189,7 +189,7 @@ func TestSessionExportAttachment(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if cd := resp.Header.Get("Content-Disposition"); cd != "attachment; filename=\"session.json\"" {
+	if cd := resp.Header.Get("Content-Disposition"); cd != "attachment; filename=\"hermes-exp1.json\"" {
 		t.Fatalf("Content-Disposition = %q", cd)
 	}
 	bodyBytes, _ := io.ReadAll(resp.Body)

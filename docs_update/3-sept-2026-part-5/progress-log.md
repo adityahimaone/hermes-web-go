@@ -55,3 +55,40 @@ Live: `http://127.0.0.1:18787/` — running (use `./ctl.sh stop` to terminate)
 ## Next step
 - Continue blueprint order on root: finish remaining §4b parity/soak gates and
   the next `04-task-breakdown` phase before any chat proxy cutover.
+
+---
+
+## Phase D — parity defect fixes (2026-09-03, second pass)
+
+Blueprint §2.3 defect list closed on Go side. Committed as one change set.
+
+## What was done
+- Health: `Health` + `NewHealth(...).WithDB(db)`; `/health` now returns full
+  Python contract (`sessions`, `active_streams`, `active_runs`, `runs`,
+  `last_run_finished_at`, `server_started_at`, float `uptime_seconds`,
+  `accept_loop`), optional `checks` with `?deep=1`, `503` when degraded.
+- Session DTO: `messageCounts` (total + user role count) replaces single
+  counter; export `hermes-{sid}.json` + `user_message_count`.
+- `pinned`/`archived` accept JSON booleans.
+- File cap exact: 400,000 bytes (routes + workspace `CreateFile`/`SaveFile`).
+- `/api/file/save` returns `{ok, path, size}`; Office extensions rejected with
+  `/api/file/office-save` hint (Python parity).
+- `/api/file/delete` supports `recursive` (workspace `DeleteRecursive`).
+- `/api/workspaces`: persisted `last` (`last_workspace.txt`) +
+  `terminal_remote_backend`; add/remove/rename return full `workspaces` list.
+- `/api/file/raw`: `?download=1`, `?inline=1`, force-attachment for
+  HTML/SVG/XHTML, CSP sandbox for inline HTML preview.
+
+## Verification evidence (fresh, this run)
+- `go build ./...` — PASS
+- `go test ./...` — PASS (all packages)
+- `go test -race ./...` — PASS
+- `go vet ./...` — PASS
+- `git diff --check` — PASS
+- New regression: `TestFileOpsEnforce400KCap`, extended
+  `TestSessionListItemMatchesPythonSidebarSemantics`,
+  `TestSessionExportAttachment` (`hermes-{sid}.json`).
+
+## Next step
+- Any residual blueprint items beyond §2.3 list (per remaining `04-task-breakdown`
+  phases) and frontend verification against the new response shapes.

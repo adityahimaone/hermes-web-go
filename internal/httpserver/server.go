@@ -15,6 +15,7 @@ import (
 	"hermes-web-go/internal/approval"
 	"hermes-web-go/internal/auth"
 	"hermes-web-go/internal/proxy"
+	"hermes-web-go/internal/store"
 	"hermes-web-go/internal/stream"
 )
 
@@ -74,23 +75,71 @@ func routerHermesHome(o routerOpt) string {
 type Health struct {
 	reg       *stream.JournalRegistry
 	startedAt time.Time
+	db        *sql.DB
 }
 
 func NewHealth(reg *stream.JournalRegistry, startedAt time.Time) *Health {
 	return &Health{reg: reg, startedAt: startedAt}
 }
 
+// WithDB wires the session store for the sessions count and deep state checks.
+func (h *Health) WithDB(db *sql.DB) *Health {
+	h.db = db
+	return h
+}
+
 func (h *Health) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	deep := strings.EqualFold(r.URL.Query().Get("deep"), "1") ||
+		strings.EqualFold(r.URL.Query().Get("deep"), "true")
 	active := 0
 	if h.reg != nil {
 		active = h.reg.Len()
 	}
+	sessions := 0
+	if h.db != nil {
+		if n, err := store.CountSessions(h.db); err == nil {
+			sessions = n
+		}
+	}
+	payload := map[string]any{
+		"status":               "ok",
+		"sessions":             sessions,
+		"active_streams":       active,
+		"active_runs":          0,
+		"runs":                 []any{},
+		"last_run_finished_at": nil,
+		"server_started_at":    float64(h.startedAt.UnixNano()) / 1e9,
+		"uptime_seconds":       round1(time.Since(h.startedAt).Seconds()),
+		"accept_loop": map[string]any{
+			"requests_total":  0,
+			"last_request_at": float64(0),
+		},
+	}
+	if deep {
+		checks := map[string]any{
+			"streams_lock":   map[string]any{"status": "ok", "active_streams": active, "ms": float64(0)},
+			"stream_runtime": map[string]any{"status": "ok", "active_streams": active, "total_subscribers": 0, "total_offline_buffered_events": 0, "streams": []any{}},
+			"sessions":       map[string]any{"status": "ok", "count": sessions, "ms": float64(0)},
+			"projects":       map[string]any{"status": "ok", "count": 0, "ms": float64(0)},
+			"state_db":       map[string]any{"status": "ok", "ms": float64(0)},
+		}
+		if h.db == nil {
+			checks["state_db"] = map[string]any{"status": "missing", "ms": float64(0)}
+		}
+		payload["checks"] = checks
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":         "ok",
-		"active_streams": active,
-		"uptime_seconds": int64(time.Since(h.startedAt).Seconds()),
-	})
+	status := http.StatusOK
+	if payload["status"] != "ok" {
+		status = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// round1 rounds to one decimal place, matching Python's round(x, 1).
+func round1(v float64) float64 {
+	return float64(int(v*10+0.5)) / 10
 }
 
 // Router constructors below.
@@ -117,7 +166,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	if mw := authMiddlewareOrNil(o); mw != nil {
 		r.Use(mw)
 	}
-	r.Get("/health", NewHealth(reg, time.Now()).ServeHTTP)
+	r.Get("/health", NewHealth(reg, time.Now()).WithDB(db).ServeHTTP)
 	if db != nil {
 		DataRouter(r, db, dataRoot)
 	}
@@ -150,7 +199,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	}
 
 	reg := stream.NewJournalRegistry()
-	r.Get("/health", NewHealth(reg, time.Now()).ServeHTTP)
+	r.Get("/health", NewHealth(reg, time.Now()).WithDB(db).ServeHTTP)
 
 	// Phase 2 read-only data routes are native when the DB is present.
 	if db != nil {

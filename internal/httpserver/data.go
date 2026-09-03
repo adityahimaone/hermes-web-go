@@ -24,7 +24,8 @@ import (
 )
 
 // maxFileBytes mirrors the Python read cap for file contents served inline.
-const maxFileBytes = 5 * 1024 * 1024
+// Python api/config.py: MAX_FILE_BYTES = 400_000.
+const maxFileBytes = 400_000
 
 // DataRouter wires the read-only data routes onto the given router. db is the
 // SQLite session store; dataRoot is the Hermes home data directory used to
@@ -115,12 +116,24 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		}
 		if r := body["pinned"]; r != nil {
 			var pinned int
-			_ = json.Unmarshal(r, &pinned)
+			if b := string(r); b == "true" {
+				pinned = 1
+			} else if b == "false" {
+				pinned = 0
+			} else {
+				_ = json.Unmarshal(r, &pinned)
+			}
 			u.Pinned = &pinned
 		}
 		if r := body["archived"]; r != nil {
 			var archived int
-			_ = json.Unmarshal(r, &archived)
+			if b := string(r); b == "true" {
+				archived = 1
+			} else if b == "false" {
+				archived = 0
+			} else {
+				_ = json.Unmarshal(r, &archived)
+			}
 			u.Archived = &archived
 		}
 		if err := store.UpdateSession(db, id, u); err != nil {
@@ -176,7 +189,8 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			writeError(w, http.StatusInternalServerError, "failed to add workspace")
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "path": cleaned})
+		// Python returns the complete updated workspace list.
+		writeJSON(w, map[string]any{"ok": true, "workspaces": workspaceList(db)})
 	})
 
 	r.Post("/api/workspaces/remove", func(w http.ResponseWriter, req *http.Request) {
@@ -191,7 +205,7 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			writeError(w, http.StatusInternalServerError, "failed to remove workspace")
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true})
+		writeJSON(w, map[string]any{"ok": true, "workspaces": workspaceList(db)})
 	})
 
 	r.Post("/api/workspaces/rename", func(w http.ResponseWriter, req *http.Request) {
@@ -210,7 +224,7 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			writeError(w, http.StatusInternalServerError, "failed to rename workspace")
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "path": filepath.Clean(body.Path), "name": body.Name})
+		writeJSON(w, map[string]any{"ok": true, "workspaces": workspaceList(db)})
 	})
 
 	r.Post("/api/file/save", func(w http.ResponseWriter, req *http.Request) {
@@ -238,6 +252,13 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 				return
 			}
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(body.Path)))
+		if err == nil {
+			// Python returns {ok, path, size}; size enables the FE editor/tree
+			// to refresh the byte count without a second read.
+			writeJSON(w, map[string]any{"ok": true, "path": body.Path, "size": info.Size()})
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "path": body.Path})
@@ -277,6 +298,7 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		var body struct {
 			SessionID string `json:"session_id"`
 			Path      string `json:"path"`
+			Recursive bool   `json:"recursive"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" || body.Path == "" {
 			writeError(w, http.StatusBadRequest, "session_id and path are required")
@@ -285,6 +307,22 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		root, err := workspaceRootForSession(db, body.SessionID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		if body.Recursive {
+			if err := workspace.DeleteRecursive(root, body.Path); err != nil {
+				if errors.Is(err, workspace.ErrOutsideRoot) {
+					writeError(w, http.StatusBadRequest, "path escapes workspace")
+					return
+				}
+				if os.IsNotExist(err) {
+					writeError(w, http.StatusNotFound, "File not found")
+					return
+				}
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true, "path": body.Path})
 			return
 		}
 		if err := workspace.DeleteFile(root, body.Path); err != nil {
@@ -367,21 +405,23 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		if strings.HasPrefix(title, "Reply ") {
 			title = title[len("Reply "):]
 		}
-		w.Header().Set("Content-Disposition", "attachment; filename=\"session.json\"")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"hermes-"+row.ID+".json\"")
 		w.Header().Set("Content-Type", "application/json")
+		total, user := messageCounts(row.Messages)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"session_id":    row.ID,
-			"title":         title,
-			"workspace":     row.Workspace,
-			"model":         row.Model,
-			"created_at":    row.CreatedAt,
-			"updated_at":    row.UpdatedAt,
-			"pinned":        row.Pinned,
-			"archived":      row.Archived,
-			"project_id":    row.ProjectID,
-			"rev":           row.Rev,
-			"message_count": messageCount(row.Messages),
-			"messages":      json.RawMessage(row.Messages),
+			"session_id":         row.ID,
+			"title":              title,
+			"workspace":          row.Workspace,
+			"model":              row.Model,
+			"created_at":         row.CreatedAt,
+			"updated_at":         row.UpdatedAt,
+			"pinned":             row.Pinned,
+			"archived":           row.Archived,
+			"project_id":         row.ProjectID,
+			"rev":                row.Rev,
+			"message_count":      total,
+			"user_message_count": user,
+			"messages":           json.RawMessage(row.Messages),
 		})
 	})
 
@@ -567,9 +607,23 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
+		// Python: ?download=1 forces attachment; dangerous MIME types always
+		// force attachment (XSS guard) unless ?inline=1 is an HTML preview.
+		forceDownload := req.URL.Query().Get("download") == "1"
+		inlinePreview := req.URL.Query().Get("inline") == "1"
+		dangerous := ct == "text/html" || ct == "application/xhtml+xml" || ct == "image/svg+xml"
+		htmlInlineOK := inlinePreview && ct == "text/html"
+		disposition := "inline"
+		if forceDownload || (dangerous && !htmlInlineOK) {
+			disposition = "attachment"
+		}
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Content-Disposition", disposition)
+		if htmlInlineOK {
+			// Sandboxed preview: opaque origin, cannot read cookies/storage.
+			w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
+		}
 		_, _ = w.Write(b)
 	})
 
@@ -583,17 +637,59 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		for _, row := range rows {
 			ws = append(ws, map[string]any{"path": row.Path, "name": row.Name})
 		}
-		last := ""
-		if len(ws) > 0 {
-			if p, ok := ws[0]["path"].(string); ok {
-				last = p
-			}
-		}
+		// Python returns the persisted last_workspace (from last_workspace.txt,
+		// falling back to the first list entry), plus the terminal backend flag.
 		writeJSON(w, map[string]any{
-			"workspaces": ws,
-			"last":       last,
+			"workspaces":              ws,
+			"last":                    lastWorkspace(dataRoot, ws),
+			"terminal_remote_backend": terminalRemoteBackend(),
 		})
 	})
+}
+
+// workspaceList returns the complete workspace list, matching the shape
+// Python returns from its workspace mutations.
+func workspaceList(db *sql.DB) []map[string]any {
+	rows, err := store.ListWorkspaces(db)
+	if err != nil {
+		return []map[string]any{}
+	}
+	ws := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		ws = append(ws, map[string]any{"path": row.Path, "name": row.Name})
+	}
+	return ws
+}
+
+// lastWorkspace returns Python's get_last_workspace(): the value from the
+// active profile's last_workspace.txt when it names an existing directory,
+// otherwise the default workspace, otherwise an empty string.
+func lastWorkspace(dataRoot string, ws []map[string]any) string {
+	if dataRoot != "" {
+		lw := filepath.Join(dataRoot, "last_workspace.txt")
+		if b, err := os.ReadFile(lw); err == nil {
+			p := strings.TrimSpace(string(b))
+			if p != "" {
+				if info, err := os.Stat(p); err == nil && info.IsDir() {
+					return p
+				}
+			}
+		}
+	}
+	if len(ws) > 0 {
+		if p, ok := ws[0]["path"].(string); ok {
+			return p
+		}
+	}
+	return ""
+}
+
+// terminalRemoteBackend mirrors Python's _terminal_remote_backend_enabled():
+// false unless the configured terminal backend is set to something other
+// than "" or "local". Go reads the same env var the Python server uses.
+func terminalRemoteBackend() bool {
+	backend := strings.ToLower(strings.TrimSpace(os.Getenv("HERMES_WEBUI_TERMINAL_BACKEND")))
+	return backend != "" && backend != "local"
 }
 
 // workspaceRootForSession resolves the session's workspace to a root path that
@@ -668,19 +764,21 @@ func sessionResponse(row store.SessionRow) map[string]any {
 	if strings.HasPrefix(title, "Reply ") {
 		title = title[len("Reply "):]
 	}
+	total, user := messageCounts(row.Messages)
 	return map[string]any{
-		"session_id":    row.ID,
-		"title":         title,
-		"workspace":     row.Workspace,
-		"model":         row.Model,
-		"created_at":    row.CreatedAt,
-		"updated_at":    row.UpdatedAt,
-		"pinned":        row.Pinned,
-		"archived":      row.Archived,
-		"project_id":    row.ProjectID,
-		"rev":           row.Rev,
-		"message_count": messageCount(row.Messages),
-		"messages":      json.RawMessage(row.Messages),
+		"session_id":         row.ID,
+		"title":              title,
+		"workspace":          row.Workspace,
+		"model":              row.Model,
+		"created_at":         row.CreatedAt,
+		"updated_at":         row.UpdatedAt,
+		"pinned":             row.Pinned,
+		"archived":           row.Archived,
+		"project_id":         row.ProjectID,
+		"rev":                row.Rev,
+		"message_count":      total,
+		"user_message_count": user,
+		"messages":           json.RawMessage(row.Messages),
 	}
 }
 
@@ -689,18 +787,20 @@ func sessionListItem(row store.SessionRow) map[string]any {
 	if strings.HasPrefix(title, "Reply ") {
 		title = title[len("Reply "):]
 	}
+	total, user := messageCounts(row.Messages)
 	return map[string]any{
-		"session_id":    row.ID,
-		"title":         title,
-		"workspace":     row.Workspace,
-		"model":         row.Model,
-		"created_at":    row.CreatedAt,
-		"updated_at":    row.UpdatedAt,
-		"pinned":        row.Pinned,
-		"archived":      row.Archived,
-		"project_id":    row.ProjectID,
-		"rev":           row.Rev,
-		"message_count": messageCount(row.Messages),
+		"session_id":         row.ID,
+		"title":              title,
+		"workspace":          row.Workspace,
+		"model":              row.Model,
+		"created_at":         row.CreatedAt,
+		"updated_at":         row.UpdatedAt,
+		"pinned":             row.Pinned,
+		"archived":           row.Archived,
+		"project_id":         row.ProjectID,
+		"rev":                row.Rev,
+		"message_count":      total,
+		"user_message_count": user,
 	}
 }
 
@@ -715,20 +815,29 @@ func sessionSearchItem(row store.SessionRow, matchType, preview string) map[stri
 	return item
 }
 
-func messageCount(messages string) int {
+// messageCounts returns the total message count and the user-message count
+// from the stored OpenAI-format messages JSON, matching Python's
+// Session.compact() (message_count = len(messages),
+// user_message_count = count(role == "user")).
+func messageCounts(messages string) (total, user int) {
 	var items []struct {
 		Role string `json:"role"`
 	}
 	if err := json.Unmarshal([]byte(messages), &items); err != nil {
-		return 0
+		return 0, 0
 	}
-	count := 0
 	for _, item := range items {
+		total++
 		if item.Role == "user" {
-			count++
+			user++
 		}
 	}
-	return count
+	return total, user
+}
+
+func messageCount(messages string) int {
+	total, _ := messageCounts(messages)
+	return total
 }
 
 func searchPreview(messages, q string) string {
