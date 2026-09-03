@@ -185,14 +185,17 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 
 ## Phase 7 — Auth + observability
 
-- [ ] `internal/auth`: password check, signed HttpOnly+SameSite=Strict cookie, 30-day sliding
-      validity (verify actual fork behavior first).
-- [ ] `POST /api/auth/login`; middleware gate on all API routes when `HERMES_WEBUI_PASSWORD` set.
-- [ ] `/health` final shape: `active_streams`, `uptime_seconds`.
-- [ ] Structured JSON request logging finalized (ts/method/path/status/ms).
-- [ ] Graceful shutdown (drain in-flight SSE streams, don't hard-kill on `ctl.sh stop`).
-- [ ] `ctl.sh`-equivalent daemon script updated to manage the Go binary (start/stop/restart/status/
-      logs), keep the same CLI UX so muscle memory transfers.
+- [x] `internal/auth`: password check, signed HttpOnly+SameSite=Lax cookie, 30-day sliding
+      validity, persisted sessions, constant-time verification, and API/browser gates.
+- [x] `POST /api/auth/login`; `GET /api/auth/status`; middleware gate on all API routes when
+      `HERMES_WEBUI_PASSWORD` is set. Evidence: `TestAuthLoginAndGate`, `TestAuthStatusRoute`.
+- [x] `/health` final shape: `status`, `active_streams`, `uptime_seconds`.
+- [x] Structured JSON request logging finalized (`ts`, `method`, `path`, `status`, `ms`).
+      Evidence: `TestLoggingJSON`.
+- [x] Graceful shutdown drains in-flight HTTP requests with 5-second timeout; `ctl.sh stop` sends
+      SIGTERM and waits for process exit.
+- [x] `ctl.sh` manages Go binary (`start|stop|restart|status|logs`) with PID/log paths configurable
+      through `HERMES_WEBUI_PID_FILE`, `HERMES_WEBUI_LOG_FILE`, and `HERMES_WEBUI_BIN`.
 
 ## Phase 8 — Full cutover
 
