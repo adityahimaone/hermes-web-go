@@ -143,8 +143,12 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [ ] Explicit real-shim fallback injection: kill/disable gRPC socket mid-session, assert next
       turn falls back to `httpClient`.
 - [ ] Load/soak `auto` mode for a full day before making `grpc` the assumed default.
-- [ ] Run one real provider-backed turn with `HERMES_WEBUI_AGENT_TRANSPORT=grpc` after credentials,
+- [x] Run one real provider-backed turn with `HERMES_WEBUI_AGENT_TRANSPORT=grpc` after credentials,
       gateway contract, and safety scope are explicitly approved; do not fabricate this result.
+      Evidence: live `POST /api/chat/start` + `GET /api/chat/stream` on `127.0.0.1:18787`,
+      stream `78cfb9369324`, returned token `pong Adit` and terminal `done`; real shim log
+      recorded `events HTTP 200` and token/done events. Runtime-only evidence; no deterministic
+      parity fixture claim.
 
 ## Phase 5 — Approvals
 
