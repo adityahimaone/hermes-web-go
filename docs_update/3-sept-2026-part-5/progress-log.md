@@ -220,6 +220,39 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   extra_body / service_tier round-trip), `TestAuxiliarySetInvalidAdvanced`
   (400 on bad extra_body).
 
+## Family-2 providers API-key writes native — slice 5 (2026-09-03, eighth pass)
+
+## What was done
+- `POST /api/providers` native — mirrors `set_provider_key()`
+  (api/providers.py:2904): env-var mapping table (19 canonical keys,
+  `lmstudio→LM_API_KEY`, `ollama-cloud→OLLAMA_API_KEY`), OAuth provider
+  rejection (copilot/copilot-acp/nous/openai-codex/qwen-oauth/xai-oauth),
+  newline rejection + min-length 8 validation, writes `<home>/.env`
+  atomically (0600 tmp+rename) preserving comments/blank-lines/order
+  (same `_write_env_file` #1164 semantics). Response
+  `{ok, provider, display_name, action}`.
+- `POST /api/providers/delete` native — mirrors `remove_provider_key()`
+  (api/providers.py:2964): set key to None (.env removal) then
+  `_clean_provider_key_from_config` (api/providers.py:2985) — removes
+  `providers.<id>.api_key`, `model.api_key` only when provider is the
+  active model provider, and `custom_providers[].api_key` where the custom
+  name/slug matches (`custom:<name>` candidates, slugified name parity with
+  `_custom_provider_name_matches`). Config.yaml cleaned via comment-preserving
+  yaml.Node round-trip.
+- Registered both routes native in `internal/proxy/registry.go`
+  (NativeMethods + NativeRoutes).
+
+## Verification evidence (fresh, this run)
+- `go build ./...`, `go vet ./...`, `git diff --check` — all PASS.
+- `go test ./...` — PASS (all packages).
+- `go test -race ./internal/httpserver/` — PASS.
+- New regressions `config_router_test.go`: `TestProvidersSetKey` (env written,
+  comments preserved), `TestProvidersSetOAuthRejected` (400),
+  `TestProvidersSetShortKey` (400), `TestProvidersDeleteEnvAndConfig`
+  (.env + model/providers/custom config keys removed),
+  `TestProvidersDeleteKeepsOtherModelKey` (active-provider guard keeps
+  unrelated model.api_key).
+
 ---
 
 ## Family-1 session lifecycle native (2026-09-03, fourth pass)

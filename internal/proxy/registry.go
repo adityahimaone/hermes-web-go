@@ -66,6 +66,8 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/profiles":                      {http.MethodGet: true},
 	"/api/model/auxiliary":               {http.MethodGet: true},
 	"/api/model/set":                     {http.MethodPost: true},
+	"/api/providers":                     {http.MethodPost: true},
+	"/api/providers/delete":              {http.MethodPost: true},
 	"/api/settings":                      {http.MethodGet: true, http.MethodPost: true},
 	"/api/workspaces/add":                {http.MethodPost: true},
 	"/api/workspaces/remove":             {http.MethodPost: true},
@@ -153,6 +155,8 @@ var NativeRoutes = map[string]bool{
 	"/api/settings":                      true,
 	"/api/model/auxiliary":               true,
 	"/api/model/set":                     true,
+	"/api/providers":                     true,
+	"/api/providers/delete":              true,
 }
 
 func IsNative(path string) bool { return NativeRoutes[path] }

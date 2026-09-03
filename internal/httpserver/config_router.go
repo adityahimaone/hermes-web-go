@@ -157,6 +157,57 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		}
 		writeJSON(w, resp)
 	})
+
+	r.Post("/api/providers", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		providerID := strings.ToLower(strings.TrimSpace(strval(body["provider"])))
+		apiKeyRaw, hasKey := body["api_key"]
+		var apiKey string
+		if hasKey && apiKeyRaw != nil {
+			apiKey = strings.TrimSpace(strval(apiKeyRaw))
+		}
+		if providerID == "" {
+			writeError(w, http.StatusBadRequest, "provider is required")
+			return
+		}
+		resp, err := setProviderKey(home, providerID, apiKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, resp)
+	})
+
+	r.Post("/api/providers/delete", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		providerID := strings.ToLower(strings.TrimSpace(strval(body["provider"])))
+		if providerID == "" {
+			writeError(w, http.StatusBadRequest, "provider is required")
+			return
+		}
+		resp, err := removeProviderKey(home, providerID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, resp)
+	})
 }
 
 // settingsDefaults mirrors api/config.py _SETTINGS_DEFAULTS. A stored value in
@@ -1423,6 +1474,241 @@ func setMapAny(mapping *yaml.Node, key string, value any) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		vnode,
 	)
+}
+
+// providerEnvVar mirrors api/providers.py _PROVIDER_ENV_VAR (canonical key name).
+func providerEnvVar(providerID string) string {
+	m := map[string]string{
+		"openrouter":   "OPENROUTER_API_KEY",
+		"anthropic":    "ANTHROPIC_API_KEY",
+		"openai":       "OPENAI_API_KEY",
+		"google":       "GOOGLE_API_KEY",
+		"gemini":       "GEMINI_API_KEY",
+		"zai":          "GLM_API_KEY",
+		"kimi-coding":  "KIMI_API_KEY",
+		"deepseek":     "DEEPSEEK_API_KEY",
+		"minimax":      "MINIMAX_API_KEY",
+		"minimax-cn":   "MINIMAX_CN_API_KEY",
+		"mistralai":    "MISTRAL_API_KEY",
+		"x-ai":         "XAI_API_KEY",
+		"xiaomi":       "XIAOMI_API_KEY",
+		"neuralwatt":   "NEURALWATT_API_KEY",
+		"opencode-zen": "OPENCODE_ZEN_API_KEY",
+		"opencode-go":  "OPENCODE_GO_API_KEY",
+		"ollama-cloud": "OLLAMA_API_KEY",
+		"lmstudio":     "LM_API_KEY",
+		"nvidia":       "NVIDIA_API_KEY",
+	}
+	return m[providerID]
+}
+
+var oauthProviders = map[string]bool{
+	"copilot": true, "copilot-acp": true, "nous": true,
+	"openai-codex": true, "qwen-oauth": true, "xai-oauth": true,
+}
+
+// writeEnvFile mirrors api/providers.py _write_env_file: preserve comments,
+// blank lines, and key order; None value removes the key; append new keys at
+// end with blank-line separator. 0644→0600 atomic (tmp+rename).
+func writeEnvFile(home, envVar, value string) error {
+	envPath := filepath.Join(home, ".env")
+	var lines []string
+	if raw, err := os.ReadFile(envPath); err == nil {
+		lines = strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+		if len(lines) == 1 && lines[0] == "" {
+			lines = nil
+		}
+	}
+	// Map each existing key to its line index (preserve order, in-place update).
+	idx := map[string]int{}
+	for i, ln := range lines {
+		s := strings.TrimSpace(ln)
+		if s != "" && !strings.HasPrefix(s, "#") && strings.Contains(s, "=") {
+			idx[strings.TrimSpace(strings.SplitN(s, "=", 2)[0])] = i
+		}
+	}
+	if value == "" {
+		if i, ok := idx[envVar]; ok {
+			lines = append(lines[:i], lines[i+1:]...)
+		}
+	} else {
+		if i, ok := idx[envVar]; ok {
+			lines[i] = envVar + "=" + value
+		} else {
+			if len(lines) > 0 && lines[len(lines)-1] != "" {
+				lines = append(lines, "")
+			}
+			lines = append(lines, envVar+"="+value)
+		}
+	}
+	content := ""
+	if len(lines) > 0 {
+		content = strings.Join(lines, "\n") + "\n"
+	}
+	tmp := envPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, envPath)
+}
+
+// setProviderKey mirrors api/providers.py set_provider_key.
+func setProviderKey(home, providerID, apiKey string) (map[string]any, error) {
+	if oauthProviders[providerID] {
+		return nil, fmt.Errorf("'%s' uses OAuth authentication. Use `hermes model` in the terminal to configure it.", providerID)
+	}
+	envVar := providerEnvVar(providerID)
+	if envVar == "" {
+		return nil, fmt.Errorf("Cannot configure API key for '%s'. This provider does not have a known env var mapping.", providerID)
+	}
+	if apiKey != "" {
+		if strings.ContainsAny(apiKey, "\n\r") {
+			return nil, fmt.Errorf("API key must not contain newline characters.")
+		}
+		if len(apiKey) < 8 {
+			return nil, fmt.Errorf("API key appears too short.")
+		}
+	}
+	if err := writeEnvFile(home, envVar, apiKey); err != nil {
+		return nil, fmt.Errorf("Failed to save API key: %v", err)
+	}
+	action := "updated"
+	if apiKey == "" {
+		action = "removed"
+	}
+	return map[string]any{
+		"ok":           true,
+		"provider":     providerID,
+		"display_name": providerDisplayName(providerID),
+		"action":       action,
+	}, nil
+}
+
+// removeProviderKey mirrors api/providers.py remove_provider_key.
+func removeProviderKey(home, providerID string) (map[string]any, error) {
+	resp, err := setProviderKey(home, providerID, "")
+	if err != nil {
+		return nil, err
+	}
+	if resp["ok"] == true {
+		if err := cleanProviderKeyFromConfig(home, providerID); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
+}
+
+// providerDisplayName is a minimal _PROVIDER_DISPLAY stand-in: id → Title Case,
+// known ones get their canonical display name.
+func providerDisplayName(providerID string) string {
+	known := map[string]string{
+		"openrouter": "OpenRouter", "anthropic": "Anthropic", "openai": "OpenAI",
+		"google": "Google", "gemini": "Gemini", "zai": "Z.ai", "deepseek": "DeepSeek",
+		"x-ai": "xAI", "minimax": "MiniMax", "mistralai": "Mistral",
+	}
+	if name, ok := known[providerID]; ok {
+		return name
+	}
+	return strings.Title(strings.ReplaceAll(providerID, "-", " "))
+}
+
+// cleanProviderKeyFromConfig mirrors api/providers.py _clean_provider_key_from_config:
+// removes providers.<id>.api_key, model.api_key (only when active provider),
+// and custom_providers[].api_key where the custom name matches the provider.
+func cleanProviderKeyFromConfig(home, providerID string) error {
+	configPath := filepath.Join(home, "config.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return err
+	}
+	doc := root.Content[0]
+	changed := false
+
+	if provs := findMapKey(doc, "providers"); provs != nil && provs.Kind == yaml.MappingNode {
+		if pc := findMapKey(provs, providerID); pc != nil && pc.Kind == yaml.MappingNode {
+			if findMapKey(pc, "api_key") != nil {
+				removeMapKey(pc, "api_key")
+				changed = true
+			}
+		}
+	}
+	if mc := findMapKey(doc, "model"); mc != nil && mc.Kind == yaml.MappingNode {
+		if findMapKey(mc, "api_key") != nil {
+			active := findMapKey(mc, "provider")
+			if active != nil && strings.EqualFold(strings.TrimSpace(active.Value), providerID) {
+				removeMapKey(mc, "api_key")
+				changed = true
+			}
+		}
+	}
+	if cps := findMapKey(doc, "custom_providers"); cps != nil && cps.Kind == yaml.SequenceNode {
+		for _, item := range cps.Content {
+			if item.Kind != yaml.MappingNode {
+				continue
+			}
+			nameNode := findMapKey(item, "name")
+			slugNode := findMapKey(item, "slug")
+			if nameNode != nil && customProviderNameMatches(providerID, nameNode.Value) ||
+				slugNode != nil && strings.EqualFold(strings.TrimSpace(slugNode.Value), providerID) {
+				if findMapKey(item, "api_key") != nil {
+					removeMapKey(item, "api_key")
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(configPath+".tmp", out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(configPath+".tmp", configPath)
+}
+
+// customProviderNameMatches mirrors api/providers.py _custom_provider_name_matches:
+// provider_id matches when it equals the raw name, "custom:<name>", or the name's slug.
+func customProviderNameMatches(providerID, rawName string) bool {
+	pid := strings.ToLower(strings.TrimSpace(providerID))
+	name := strings.ToLower(strings.TrimSpace(rawName))
+	if pid == "" || name == "" {
+		return false
+	}
+	slug := slugify(name)
+	if pid == name || pid == "custom:"+name || (slug != "" && pid == slug) {
+		return true
+	}
+	return false
+}
+
+// slugify converts a display name into a custom-provider slug (lowercase,
+// non-alphanumeric → "-", collapse repeats, trim "-").
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	return out
 }
 
 // countEnableSkills counts <home>/skills/**/SKILL.md, mirroring Python's

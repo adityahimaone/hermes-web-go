@@ -723,3 +723,124 @@ func TestAuxiliarySetInvalidAdvanced(t *testing.T) {
 		t.Fatalf("status = %d, want 400 (invalid extra_body)", rr.Code)
 	}
 }
+
+func TestProvidersSetKey(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, ".env", "# my env\nexisting=1\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers", `{"provider":"openrouter","api_key":"sk-or-v1-test-key-12345678"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["ok"] != true || resp["action"] != "updated" || resp["provider"] != "openrouter" {
+		t.Errorf("resp = %v", resp)
+	}
+	envRaw, err := os.ReadFile(filepath.Join(home, ".env"))
+	if err != nil {
+		t.Fatalf("env read: %v", err)
+	}
+	if !strings.Contains(string(envRaw), "OPENROUTER_API_KEY=sk-or-v1-test-key-12345678") {
+		t.Errorf("env = %q, want OPENROUTER_API_KEY set", string(envRaw))
+	}
+	// comment preserved
+	if !strings.Contains(string(envRaw), "# my env") {
+		t.Errorf("comment lost: %q", string(envRaw))
+	}
+	if !strings.Contains(string(envRaw), "existing=1") {
+		t.Errorf("existing var lost: %q", string(envRaw))
+	}
+}
+
+func TestProvidersSetOAuthRejected(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers", `{"provider":"copilot","api_key":"sk-test-12345678"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (oauth)", rr.Code)
+	}
+}
+
+func TestProvidersSetShortKey(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers", `{"provider":"openrouter","api_key":"short"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (too short)", rr.Code)
+	}
+}
+
+func TestProvidersDeleteEnvAndConfig(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, ".env", "OPENROUTER_API_KEY=sk-or-v1-test-key-12345678\nANTHROPIC_API_KEY=sk-ant-other-12345678\n")
+	writeHomeFile(t, home, "config.yaml", `model:
+  provider: openrouter
+  api_key: sk-config-key-12345678
+providers:
+  openrouter:
+    api_key: sk-provider-key-12345678
+custom_providers:
+  - name: openrouter
+    base_url: https://proxy.example/v1
+    api_key: sk-custom-key-12345678
+`)
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers/delete", `{"provider":"openrouter"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	envRaw, _ := os.ReadFile(filepath.Join(home, ".env"))
+	if strings.Contains(string(envRaw), "OPENROUTER_API_KEY") {
+		t.Errorf(".env still has OPENROUTER_API_KEY: %q", string(envRaw))
+	}
+	if !strings.Contains(string(envRaw), "ANTHROPIC_API_KEY") {
+		t.Errorf(".env lost ANTHROPIC_API_KEY: %q", string(envRaw))
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if _, has := mc["api_key"]; has {
+		t.Errorf("model.api_key still present")
+	}
+	pc, _ := cfg["providers"].(map[string]any)
+	pr, _ := pc["openrouter"].(map[string]any)
+	if _, has := pr["api_key"]; has {
+		t.Errorf("providers.openrouter.api_key still present")
+	}
+	cps, _ := cfg["custom_providers"].([]any)
+	for _, c := range cps {
+		cm, _ := c.(map[string]any)
+		if cm["name"] == "openrouter" {
+			if _, has := cm["api_key"]; has {
+				t.Errorf("custom_providers openrouter api_key still present")
+			}
+		}
+	}
+}
+
+func TestProvidersDeleteKeepsOtherModelKey(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", `model:
+  provider: anthropic
+  api_key: sk-ant-active-12345678
+providers:
+  openrouter:
+    api_key: sk-or-config-12345678
+`)
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers/delete", `{"provider":"openrouter"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["api_key"] != "sk-ant-active-12345678" {
+		t.Errorf("model.api_key = %v, want kept (active provider is anthropic)", mc["api_key"])
+	}
+	pc, _ := cfg["providers"].(map[string]any)
+	pr, _ := pc["openrouter"].(map[string]any)
+	if _, has := pr["api_key"]; has {
+		t.Errorf("providers.openrouter.api_key still present")
+	}
+}
