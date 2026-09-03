@@ -72,11 +72,11 @@ func routerHermesHome(o routerOpt) string {
 
 // Health carries the state needed to answer /health.
 type Health struct {
-	reg       *stream.Registry
+	reg       *stream.JournalRegistry
 	startedAt time.Time
 }
 
-func NewHealth(reg *stream.Registry, startedAt time.Time) *Health {
+func NewHealth(reg *stream.JournalRegistry, startedAt time.Time) *Health {
 	return &Health{reg: reg, startedAt: startedAt}
 }
 
@@ -109,7 +109,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	for _, fn := range opts {
 		fn(&o)
 	}
-	reg := stream.NewRegistry()
+	reg := stream.NewJournalRegistry()
 
 	r := chi.NewRouter()
 	r.Use(Recover)
@@ -149,7 +149,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		r.Use(mw)
 	}
 
-	reg := stream.NewRegistry()
+	reg := stream.NewJournalRegistry()
 	r.Get("/health", NewHealth(reg, time.Now()).ServeHTTP)
 
 	// Phase 2 read-only data routes are native when the DB is present.

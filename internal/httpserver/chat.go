@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -20,7 +21,7 @@ import (
 // (db) and the agent transport (client). When client is nil the routes are
 // not registered, so the catch-all proxy can keep serving them (Phase 4
 // cutover keeps proxy fallback until the runner is verified live).
-func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclient.AgentClient, st *approval.Store) {
+func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client agentclient.AgentClient, st *approval.Store) {
 	if db == nil || reg == nil || client == nil {
 		return
 	}
@@ -76,12 +77,12 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 
 		// Create the stream before spawning the turn so the SSE endpoint can
 		// attach even if the agent returns instantly.
-		streamID, ch := reg.Create()
+		streamID, journal := reg.Create(256)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			defer cancel()
-			defer reg.Close(streamID)
+			// journal terminal via finishTurn
 			var answer strings.Builder
 			var reasoning strings.Builder
 			doneEmitted := false
@@ -129,10 +130,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 						"messages":      messages,
 					}}
 				}
-				select {
-				case ch <- agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData}:
-				case <-ctx.Done():
-				}
+				journal.Finish(agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData})
 			}
 
 			evCh, err := client.RunTurn(ctx, agentclient.TurnRequest{
@@ -143,10 +141,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 				Model:     model,
 			})
 			if err != nil {
-				select {
-				case ch <- agentclient.TurnEvent{Type: agentclient.EventError, Error: err.Error()}:
-				case <-ctx.Done():
-				}
+				journal.Publish(agentclient.TurnEvent{Type: agentclient.EventError, Error: err.Error()})
 				finishTurn("partial")
 				return
 			}
@@ -177,10 +172,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 					// Normalize transport terminal events at this boundary.
 					// chat.go owns persistence and emits one canonical done.
 					if ev.Type == agentclient.EventError {
-						select {
-						case ch <- ev:
-						case <-ctx.Done():
-						}
+						journal.Publish(ev)
 						finishTurn("partial")
 						return
 					}
@@ -188,12 +180,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 						finishTurn("")
 						return
 					}
-					select {
-					case ch <- ev:
-					case <-ctx.Done():
-						finishTurn("partial")
-						return
-					}
+					journal.Publish(ev)
 				case <-ctx.Done():
 					finishTurn("partial")
 					return
@@ -209,22 +196,35 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 
 	r.Get("/api/chat/stream", func(w http.ResponseWriter, req *http.Request) {
 		streamID := req.URL.Query().Get("stream_id")
-		ch, ok := reg.Get(streamID)
+		journal, ok := reg.Get(streamID)
 		if !ok {
 			writeError(w, http.StatusNotFound, "stream not found")
 			return
 		}
+		after := parseAfterSeq(req)
+		replay, live, cancel := journal.Subscribe(after)
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.Header().Set("Connection", "close")
-		stream.WriteSSEWithContext(req.Context(), w, ch, stream.SSEHeartbeatInterval)
+		stream.WriteJournalSSE(req.Context(), w, replay, live, cancel, stream.SSEHeartbeatInterval, streamID)
 	})
 
 	r.Get("/api/chat/stream/status", func(w http.ResponseWriter, req *http.Request) {
 		streamID := req.URL.Query().Get("stream_id")
-		active := reg.Active(streamID)
-		writeJSON(w, map[string]any{"active": active, "stream_id": streamID, "replay_available": false})
+		journal, ok := reg.Get(streamID)
+		active := false
+		replayAvailable := false
+		if ok {
+			active = journal.Active()
+			_, live, cancel := journal.Subscribe(0)
+			_ = live
+			if cancel != nil {
+				cancel()
+			}
+			replayAvailable = len(journal.SnapshotAfter(0)) > 0
+		}
+		writeJSON(w, map[string]any{"active": active, "stream_id": streamID, "replay_available": replayAvailable})
 	})
 
 	r.Post("/api/chat", func(w http.ResponseWriter, req *http.Request) {
@@ -282,6 +282,25 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 		})
 	})
 
+}
+
+func parseAfterSeq(req *http.Request) uint64 {
+	if v := req.URL.Query().Get("after_seq"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	if v := req.Header.Get("Last-Event-ID"); v != "" {
+		// Go ID form is "<streamID>:<seq>".
+		parts := strings.Split(v, ":")
+		if len(parts) > 0 {
+			last := parts[len(parts)-1]
+			if n, err := strconv.ParseUint(strings.TrimSpace(last), 10, 64); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 func trimSpace(s string) string {
