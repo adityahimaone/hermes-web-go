@@ -145,6 +145,43 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   compatible-count may differ), status/kanban enrichment skipped,
   `single_profile_mode` always false.
 
+## Family-2 settings POST native — slice 3 (2026-09-03, sixth pass)
+
+## What was done
+- `POST /api/settings` native in `config_router.go` — mirrors Python
+  `save_settings()` (api/config.py:10113): loads current settings, merges
+  incoming payload, validates each key, persists atomically
+  (`settings.json.tmp` + rename), returns full settings (same shape as GET).
+- Validation parity: `_SETTINGS_ALLOWED_KEYS`-style filter (only known keys,
+  `password_hash`/`default_model*` rejected), enum whitelists per key
+  (send_key, theme, skin, font_smoothing, etc.), int ranges
+  (pinned_sessions_limit 1..99, pin_sidebar_sessions 0..99, etc.), float
+  precision, bool coercion, `tts_*` sanitize (engine regex + language regex),
+  `hide_composer_*` composer_control_order key filter (dedup + strip),
+  hidden_tabs/tab_order exclude chat+settings, eviction list ordering.
+- Legacy theme map ported (`slate→dark/slate`, `neon→dark/neon`) so
+  `theme:"slate"` persists as `dark` + `skin:"slate"`.
+- Speech keys survive unrelated saves (`persisted_speech_keys` re-injected
+  into stored map before merge) — same semantics as Python
+  `persisted_speech_settings_keys`.
+- Alias resolution: `_set_password`/`_clear_password`/_passwordless in payload
+  → 501 Not Implemented (auth module not yet ported; deploy default auth off).
+- `default_workspace` from `HERMES_WEBUI_DEFAULT_WORKSPACE` → `~/workspace/work`
+  (created if missing) → config.yaml (Python `resolve_default_workspace`
+  parity), used for `workdir`-less dashboard queries.
+- Registered `/api/settings` POST native in `internal/proxy/registry.go`.
+
+## Verification evidence (fresh, this run)
+- `go build ./...`, `go vet ./...`, `git diff --check` — all PASS.
+- `go test ./...` — PASS; `go test -race ./internal/httpserver/` — PASS.
+- New regressions `config_router_test.go`: `TestSettingsSavePersists`
+  (write file + defaults merge + no password_hash), `TestSettingsSaveInvalid
+  EnumIgnored` (invalid enum → unchanged default), `TestSettingsSaveIntRange`
+  (out-of-range → unchanged default, valid persists), `TestSettingsSaveLegacy
+  ThemeMap` (slate→dark/skin slate), `TestSettingsSaveSpeechKeysPersist`
+  (speech keys survive unrelated save), `TestSettingsSaveAuthFieldsRejected`
+  (501), `TestSettingsSaveComposerOrderClean` (dedup + bogus dropped).
+
 ---
 
 ## Family-1 session lifecycle native (2026-09-03, fourth pass)

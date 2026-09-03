@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -75,6 +76,33 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		}
 		settings := loadWebUISettings(dataRoot, home)
 		writeJSON(w, settings)
+	})
+
+	r.Post("/api/settings", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		// Auth-bound settings (password / passwordless / passkey) stay on the
+		// Python side until the auth module is ported. Refuse loudly rather
+		// than half-apply.
+		for _, k := range []string{"_set_password", "_clear_password", "_passwordless", "_current_password"} {
+			if _, has := body[k]; has {
+				writeError(w, http.StatusNotImplemented, k+" requires the legacy auth backend; proxy still owns password settings")
+				return
+			}
+		}
+		saved, err := saveWebUISettings(dataRoot, home, body)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save settings")
+			return
+		}
+		writeJSON(w, saved)
 	})
 }
 
@@ -310,6 +338,459 @@ func persistedSpeechKeys(stored map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// ── Settings save (POST /api/settings) ─────────────────────────────────────
+
+// settingsEnumValues mirrors api/config.py _SETTINGS_ENUM_VALUES.
+var settingsEnumValues = map[string]map[string]bool{
+	"send_key":                     {"enter": true, "ctrl+enter": true, "shift+enter": true, "ctrl+shift+enter": true},
+	"sidebar_density":              {"compact": true, "detailed": true},
+	"update_channel":               {"stable": true, "experimental": true},
+	"font_size":                    {"small": true, "default": true, "large": true, "xlarge": true},
+	"auto_title_refresh_every":     {"0": true, "5": true, "10": true, "20": true},
+	"default_message_mode":         {"queue": true, "interrupt": true, "steer": true},
+	"chat_activity_display_mode":   {"compact_worklog": true, "transparent_stream": true, "hide_all_activity": true},
+	"structured_code_default_view": {"auto": true, "on": true, "off": true},
+}
+
+// settingsIntRanges mirrors api/config.py _SETTINGS_INT_RANGES.
+var settingsIntRanges = map[string][2]int64{
+	"pinned_sessions_limit":           {1, 99},
+	"inflight_state_max_sessions":     {1, 25},
+	"inflight_state_max_messages":     {1, 100},
+	"inflight_state_max_tool_calls":   {1, 200},
+	"inflight_state_max_string_chars": {1000, 500000},
+	"inflight_state_max_json_chars":   {100000, 4000000},
+	"structured_code_auto_tree_lines": {1, 1000},
+	"voice_silence_ms":                {200, 60000},
+}
+
+// settingsFloatRanges mirrors api/config.py _SETTINGS_FLOAT_RANGES.
+var settingsFloatRanges = map[string][2]float64{
+	"tts_rate":  {0.5, 2.0},
+	"tts_pitch": {0.0, 2.0},
+}
+
+// settingsBoolKeys mirrors api/config.py _SETTINGS_BOOL_KEYS.
+var settingsBoolKeys = map[string]bool{
+	"onboarding_completed": true, "show_token_usage": true, "show_quota_chip": true,
+	"show_conversation_outline": true, "show_busy_placeholder_hint": true,
+	"hide_empty_state_suggestions": true, "hide_empty_state_panel": true,
+	"new_chat_on_workspace_switch": true, "virtualize_transcript": true,
+	"virtualize_transcript_optin": true, "show_tps": true, "fade_text_effect": true,
+	"show_cli_sessions": true, "show_claude_code_sessions": true,
+	"show_cron_sessions": true, "show_webhook_sessions": true,
+	"show_kanban_sessions": true, "show_previous_messaging_sessions": true,
+	"sync_to_insights": true, "check_for_updates": true, "ignore_agent_updates": true,
+	"whats_new_summary_enabled": true, "tts_enabled": true, "tts_auto_read": true,
+	"voice_mode_button": true, "voice_continuous": true, "raw_audio_mode": true,
+	"session_jump_buttons": true, "render_user_markdown": true,
+	"large_text_paste_as_attachment": true, "project_quick_create_buttons": true,
+	"session_endless_scroll": true, "transparent_stream_event_timestamps": true,
+	"auto_scroll_follow": true, "worklog_details_expanded_default": true,
+	"hide_composer_attach": true, "hide_composer_saved_prompts": true,
+	"hide_composer_mic": true, "show_titlebar_profile": true,
+	"hide_composer_voice_mode": true, "hide_composer_yolo": true,
+	"hide_composer_profile": true, "hide_composer_workspace": true,
+	"hide_composer_mobile_config": true, "hide_composer_model": true,
+	"hide_composer_quota_chip": true, "hide_composer_reasoning": true,
+	"hide_composer_toolsets": true, "hide_composer_status": true,
+	"hide_composer_context": true, "hide_composer_bg_badge": true,
+	"sound_enabled": true, "rtl": true, "notifications_enabled": true,
+	"show_thinking": true, "simplified_tool_calling": true,
+	"terminal_auto_expand_on_output": true, "workspace_todos_tab": true,
+	"api_redact_enabled": true, "auth_disabled_acknowledged": true,
+}
+
+// settingsLegacyThemeMap mirrors api/config.py _SETTINGS_LEGACY_THEME_MAP.
+var settingsLegacyThemeMap = map[string][2]string{
+	"slate":     {"dark", "slate"},
+	"solarized": {"dark", "poseidon"},
+	"monokai":   {"dark", "sisyphus"},
+	"nord":      {"dark", "slate"},
+	"oled":      {"dark", "default"},
+}
+
+var settingsThemeValues = map[string]bool{"light": true, "dark": true, "system": true}
+
+var settingsSkinValues = map[string]bool{
+	"default": true, "ares": true, "mono": true, "graphite": true, "slate": true,
+	"poseidon": true, "sisyphus": true, "charizard": true, "sienna": true,
+	"catppuccin": true, "nous": true, "geist-contrast": true, "zeus": true,
+	"verdigris": true, "neon-soft": true, "neon-paint": true,
+}
+
+var settingsLangRE = regexp.MustCompile(`^[a-zA-Z]{2,10}(-[a-zA-Z0-9]{2,8})?$`)
+var settingsTTSEngineRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// saveWebUISettings mirrors api/config.py save_settings minus auth fields.
+// Returns the merged settings payload (like the Python response) and writes
+// settings.json atomically.
+func saveWebUISettings(dataRoot, home string, body map[string]any) (map[string]any, error) {
+	stored := readRawSettings(dataRoot)
+	if stored == nil {
+		stored = map[string]any{}
+	}
+	// persisted_speech_keys snapshot BEFORE merge (like Python).
+	prevSpeechKeys := persistedSpeechKeys(stored)
+	appliedSpeechKeys := map[string]bool{}
+
+	current := loadWebUISettings(dataRoot, home) // merged defaults + stored
+
+	// Legacy renames (like Python save_settings).
+	if _, hasNew := body["default_message_mode"]; !hasNew {
+		if bim, hasOld := body["busy_input_mode"]; hasOld {
+			body["default_message_mode"] = bim
+		}
+	}
+	delete(body, "busy_input_mode")
+	delete(body, "simplified_tool_calling")
+	if _, hasNew := body["worklog_details_expanded_default"]; !hasNew {
+		if adf, hasOld := body["activity_feed_expanded_default"]; hasOld {
+			body["worklog_details_expanded_default"] = adf
+		}
+	}
+	delete(body, "activity_feed_expanded_default")
+
+	// dashboard_plugins deep-merge.
+	if plugins, ok := body["dashboard_plugins"].(map[string]any); ok {
+		cur := map[string]any{}
+		if c, ok := current["dashboard_plugins"].(map[string]any); ok {
+			cur = c
+		}
+		for k, v := range plugins {
+			cur[k] = boolVal(v)
+		}
+		current["dashboard_plugins"] = cur
+	}
+
+	pendingTheme := asString(current["theme"])
+	pendingSkin := asString(current["skin"])
+	themeExplicit := false
+	skinExplicit := false
+
+	for k, v := range body {
+		if k == "dashboard_plugins" {
+			continue
+		}
+		if !isAllowedSettingsKey(k) {
+			continue
+		}
+		switch k {
+		case "theme":
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				pendingTheme = s
+				themeExplicit = true
+			}
+			continue
+		case "skin":
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				pendingSkin = s
+				skinExplicit = true
+			}
+			continue
+		}
+		if vals, ok := settingsEnumValues[k]; ok {
+			if s, ok := v.(string); !ok || !vals[s] {
+				continue
+			}
+		}
+		if rng, ok := settingsIntRanges[k]; ok {
+			n, ok := toInt64(v)
+			if !ok || n < rng[0] || n > rng[1] {
+				continue
+			}
+			v = n
+		}
+		if rng, ok := settingsFloatRanges[k]; ok {
+			f, ok := toFloat64(v)
+			if !ok || f < rng[0] || f > rng[1] {
+				continue
+			}
+			v = f
+		}
+		if k == "tts_engine" {
+			s, ok := v.(string)
+			if !ok || !settingsTTSEngineRE.MatchString(strings.TrimSpace(s)) {
+				continue
+			}
+			v = strings.TrimSpace(s)
+		}
+		if k == "tts_voice" {
+			s, ok := v.(string)
+			if !ok || len(s) > 200 || strings.ContainsRune(s, 0) {
+				continue
+			}
+		}
+		if k == "language" {
+			s, ok := v.(string)
+			if !ok || !settingsLangRE.MatchString(s) {
+				continue
+			}
+		}
+		if k == "hidden_tabs" || k == "tab_order" || k == "composer_control_order" {
+			cleaned, ok := cleanOrderList(k, v)
+			if !ok {
+				continue
+			}
+			v = cleaned
+		}
+		if k == "provider_cost_budget" {
+			if v == nil || asString(v) == "" {
+				current[k] = nil
+				continue
+			}
+			budget, ok := toFloat64(v)
+			if !ok || budget <= 0 || budget >= 1e9 {
+				continue
+			}
+			current[k] = budget
+			continue
+		}
+		if settingsBoolKeys[k] {
+			v = boolVal(v)
+		}
+		current[k] = v
+		if speechKeys[k] {
+			appliedSpeechKeys[k] = true
+		}
+	}
+
+	// Theme/skin pair normalize (Python parity incl legacy map).
+	if themeExplicit && !skinExplicit {
+		raw := strings.ToLower(strings.TrimSpace(pendingTheme))
+		if !settingsThemeValues[raw] {
+			pendingSkin = ""
+		}
+	}
+	theme, skin := normalizeAppearancePair(pendingTheme, pendingSkin)
+	current["theme"] = theme
+	current["skin"] = skin
+
+	// default_workspace resolve (env var / home fallback).
+	current["default_workspace"] = resolveDefaultWorkspace(home)
+	if model, provider := configModel(home); model != "" {
+		current["default_model"] = model
+		if provider != "" {
+			current["default_model_provider"] = provider
+		}
+	}
+
+	// Effective persisted speech keys = previous ∪ applied.
+	effective := map[string]bool{}
+	for _, k := range prevSpeechKeys {
+		effective[k] = true
+	}
+	for k := range appliedSpeechKeys {
+		effective[k] = true
+	}
+	persisted := settingsPayloadForWrite(current, effective)
+	if err := atomicWriteSettings(dataRoot, persisted); err != nil {
+		return nil, err
+	}
+
+	saved := current
+	saved["persisted_speech_keys"] = persistedSpeechKeys(readRawSettings(dataRoot))
+	delete(saved, "password_hash")
+	return saved, nil
+}
+
+// isAllowedSettingsKey mirrors Python _SETTINGS_ALLOWED_KEYS (defaults minus
+// password_hash / default_model / simplified_tool_calling).
+func isAllowedSettingsKey(k string) bool {
+	if k == "password_hash" || k == "default_model" || k == "simplified_tool_calling" {
+		return false
+	}
+	_, ok := settingsDefaults[k]
+	return ok
+}
+
+// cleanOrderList mirrors Python list-valued ordering settings validation:
+// strip, dedupe preserving first order, exclude chat/settings tabs, only known
+// composer keys (hide_composer_*).
+func cleanOrderList(k string, v any) ([]string, bool) {
+	list, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	var cleaned []string
+	for _, item := range list {
+		s, ok := item.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		if (k == "hidden_tabs" || k == "tab_order") && (s == "chat" || s == "settings") {
+			continue
+		}
+		if k == "composer_control_order" && !strings.HasPrefix(s, "hide_composer_") {
+			continue
+		}
+		cleaned = append(cleaned, s)
+		seen[s] = true
+	}
+	return cleaned, true
+}
+
+// settingsPayloadForWrite mirrors _settings_payload_for_write: drops
+// default_model + persisted_speech_keys, keeps speech keys only when persisted.
+func settingsPayloadForWrite(settings map[string]any, persistedSpeech map[string]bool) map[string]any {
+	out := map[string]any{}
+	for k, v := range settings {
+		if k == "default_model" || k == "default_model_provider" || k == "persisted_speech_keys" {
+			continue
+		}
+		if speechKeys[k] && !persistedSpeech[k] {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// atomicWriteSettings writes settings.json atomically (tmp + fsync + rename),
+// preserving the existing file mode (Python _atomic_write_settings_text parity).
+func atomicWriteSettings(dataRoot string, payload map[string]any) error {
+	if dataRoot == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dataRoot, "settings.json")
+	mode := os.FileMode(0o666)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dataRoot, ".settings.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// normalizeAppearancePair mirrors Python _normalize_appearance incl legacy map.
+func normalizeAppearancePair(theme, skin string) (string, string) {
+	rawTheme := strings.ToLower(strings.TrimSpace(theme))
+	rawSkin := strings.ToLower(strings.TrimSpace(skin))
+	if legacy, ok := settingsLegacyThemeMap[rawTheme]; ok {
+		if rawSkin != "" && settingsSkinValues[rawSkin] {
+			return legacy[0], rawSkin
+		}
+		return legacy[0], legacy[1]
+	}
+	if settingsThemeValues[rawTheme] {
+		if rawSkin != "" && settingsSkinValues[rawSkin] {
+			return rawTheme, rawSkin
+		}
+		return rawTheme, "default"
+	}
+	return "dark", "default"
+}
+
+// resolveDefaultWorkspace mirrors api/config.py resolve_default_workspace
+// discovery order (env var → ~/workspace → ~/work → create).
+func resolveDefaultWorkspace(home string) string {
+	if env := os.Getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"); strings.TrimSpace(env) != "" {
+		return strings.TrimSpace(env)
+	}
+	u, err := os.UserHomeDir()
+	base := ""
+	if err == nil {
+		base = u
+	} else {
+		base = home
+	}
+	for _, p := range []string{filepath.Join(base, "workspace"), filepath.Join(base, "work")} {
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p
+		}
+	}
+	ws := filepath.Join(base, "workspace")
+	_ = os.MkdirAll(ws, 0o755)
+	return ws
+}
+
+func boolVal(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		s := strings.ToLower(strings.TrimSpace(t))
+		return s == "true" || s == "1" || s == "on" || s == "yes"
+	case float64:
+		return t != 0
+	case int64:
+		return t != 0
+	case int:
+		return t != 0
+	default:
+		return false
+	}
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func toInt64(v any) (int64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return int64(t), true
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case int64:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // listProfileRows builds profile rows in Python's _build_profile_rows_fast

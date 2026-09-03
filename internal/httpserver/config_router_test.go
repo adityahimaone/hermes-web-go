@@ -383,7 +383,7 @@ func TestSettingsSpeechKeysPersisted(t *testing.T) {
 	}
 }
 
-// TestConfigRouterNativeNoProxyFallback ensures Family-2 read routes are routed
+// TestConfigRouterNativeNoProxyFallback ensures Family-2 routes are routed
 // natively through the full server router (never proxy Teapot).
 func TestConfigRouterNativeNoProxyFallback(t *testing.T) {
 	home := t.TempDir()
@@ -417,5 +417,141 @@ func TestConfigRouterNativeNoProxyFallback(t *testing.T) {
 		if resp.StatusCode != 200 || strings.Contains(string(body), "proxy-fallback") {
 			t.Fatalf("%s = %d %q", u, resp.StatusCode, body)
 		}
+	}
+}
+
+func postSettings(t *testing.T, dataRoot, home, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestSettingsSavePersists(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\n")
+	dataRoot := t.TempDir()
+
+	rr := postSettings(t, dataRoot, home, `{"theme":"light","send_key":"ctrl+enter","show_token_usage":true}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	// file written
+	stored := readRawSettings(dataRoot)
+	if stored["theme"] != "light" {
+		t.Errorf("stored theme = %v, want light", stored["theme"])
+	}
+	if stored["send_key"] != "ctrl+enter" {
+		t.Errorf("stored send_key = %v, want ctrl+enter", stored["send_key"])
+	}
+	v, _ := stored["show_token_usage"].(bool)
+	if !v {
+		t.Errorf("stored show_token_usage = %v, want true", stored["show_token_usage"])
+	}
+	// response has defaults + no password_hash
+	if _, has := stored["password_hash"]; has {
+		t.Errorf("password_hash persisted")
+	}
+}
+
+func TestSettingsSaveInvalidEnumIgnored(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// invalid send_key → NOT changed, stays default (stored default = enter)
+	rr := postSettings(t, dataRoot, home, `{"send_key":"triple-tap","theme":"dark"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	stored := readRawSettings(dataRoot)
+	if stored["send_key"] != "enter" {
+		t.Errorf("stored send_key = %v, want default enter (invalid not applied)", stored["send_key"])
+	}
+}
+
+func TestSettingsSaveIntRange(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// 500 out of range 1..99 → NOT changed, stays default (3)
+	rr := postSettings(t, dataRoot, home, `{"pinned_sessions_limit":500}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	stored := readRawSettings(dataRoot)
+	if stored["pinned_sessions_limit"] != float64(3) {
+		t.Errorf("pinned_sessions_limit = %v, want default 3 (invalid not applied)", stored["pinned_sessions_limit"])
+	}
+	// valid value persists
+	rr = postSettings(t, dataRoot, home, `{"pinned_sessions_limit":4}`)
+	stored = readRawSettings(dataRoot)
+	if v, ok := toInt64(stored["pinned_sessions_limit"]); !ok || v != 4 {
+		t.Errorf("pinned_sessions_limit = %v, want 4", stored["pinned_sessions_limit"])
+	}
+}
+
+func TestSettingsSaveLegacyThemeMap(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	rr := postSettings(t, dataRoot, home, `{"theme":"slate"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	stored := readRawSettings(dataRoot)
+	if stored["theme"] != "dark" {
+		t.Errorf("theme = %v, want dark (legacy slate)", stored["theme"])
+	}
+	if stored["skin"] != "slate" {
+		t.Errorf("skin = %v, want slate", stored["skin"])
+	}
+}
+
+func TestSettingsSaveSpeechKeysPersist(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	rr := postSettings(t, dataRoot, home, `{"tts_engine":"elevenlabs","tts_voice":"amy"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	stored := readRawSettings(dataRoot)
+	if stored["tts_engine"] != "elevenlabs" {
+		t.Errorf("tts_engine not persisted")
+	}
+	if stored["tts_voice"] != "amy" {
+		t.Errorf("tts_voice not persisted")
+	}
+	// non-speech unrelated save keeps speech keys
+	rr = postSettings(t, dataRoot, home, `{"theme":"dark"}`)
+	stored = readRawSettings(dataRoot)
+	if stored["tts_engine"] == nil {
+		t.Errorf("tts_engine dropped on unrelated save (persisted speech keys lost)")
+	}
+}
+
+func TestSettingsSaveAuthFieldsRejected(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	rr := postSettings(t, dataRoot, home, `{"_set_password":"hunter2"}`)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501 (auth field)", rr.Code)
+	}
+}
+
+func TestSettingsSaveComposerOrderClean(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	rr := postSettings(t, dataRoot, home, `{"composer_control_order":["hide_composer_mic","hide_composer_mic","hide_composer_model","bogus_key"]}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	stored := readRawSettings(dataRoot)
+	list, ok := stored["composer_control_order"].([]any)
+	if !ok {
+		t.Fatalf("composer_control_order = %v", stored["composer_control_order"])
+	}
+	if len(list) != 2 {
+		t.Errorf("composer_control_order len = %d, want 2 (dedup + bogus dropped)", len(list))
 	}
 }

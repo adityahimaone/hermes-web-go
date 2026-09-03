@@ -64,7 +64,7 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/session/conversation-rounds":   {http.MethodPost: true},
 	"/api/profile/active":                {http.MethodGet: true},
 	"/api/profiles":                      {http.MethodGet: true},
-	"/api/settings":                      {http.MethodGet: true},
+	"/api/settings":                      {http.MethodGet: true, http.MethodPost: true},
 	"/api/workspaces/add":                {http.MethodPost: true},
 	"/api/workspaces/remove":             {http.MethodPost: true},
 	"/api/workspaces/rename":             {http.MethodPost: true},
