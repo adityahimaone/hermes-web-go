@@ -496,6 +496,87 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		}
 		writeJSON(w, providerCostHistory(home, providerID, days))
 	})
+
+	// ── /api/reasoning ─────────────────────────────────────────────────────
+	// Mirrors api/routes.py /reasoning handler: CLI-parity config.yaml keys
+	// display.show_reasoning and agent.reasoning_effort, so a WebUI preference
+	// is honoured by the CLI REPL too)Skip GET returns current status.
+	r.Get("/api/reasoning", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		writeJSON(w, reasoningStatus(home))
+	})
+
+	r.Get("/api/dashboard/config", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		writeJSON(w, dashboardConfig(home))
+	})
+
+	r.Get("/api/dashboard/status", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		writeJSON(w, dashboardStatus(home))
+	})
+
+	r.Get("/api/projects", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		allProfiles := req.URL.Query().Get("all_profiles") == "1"
+		writeJSON(w, projectsList(home, allProfiles))
+	})
+
+	r.Get("/api/auth/status", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		writeJSON(w, authStatus(home))
+	})
+
+	r.Post("/api/reasoning", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if v, ok := body["display"]; ok {
+			flag := strings.ToLower(strings.TrimSpace(strval(v)))
+			show := flag == "show" || flag == "on" || flag == "true" || flag == "1"
+			if flag != "" && flag != "show" && flag != "hide" && flag != "on" && flag != "off" && flag != "true" && flag != "false" && flag != "1" && flag != "0" {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("display must be show|hide|on|off (got '%s')", strval(v)))
+				return
+			}
+			writeJSON(w, setReasoningDisplay(home, show))
+			return
+		}
+		if v, ok := body["effort"]; ok {
+			effort := strings.ToLower(strings.TrimSpace(strval(v)))
+			modelID := strings.TrimSpace(strval(body["model"]))
+			providerID := strings.TrimSpace(strval(body["provider"]))
+			baseURL := strings.TrimSpace(strval(body["base_url"]))
+			resp, err := setReasoningEffort(home, effort, modelID, providerID, baseURL)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, resp)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "reasoning: must supply 'display' or 'effort'")
+	})
 }
 
 // settingsDefaults mirrors api/config.py _SETTINGS_DEFAULTS. A stored value in

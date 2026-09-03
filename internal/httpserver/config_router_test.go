@@ -798,6 +798,96 @@ func TestAuxiliarySetInvalidAdvanced(t *testing.T) {
 	}
 }
 
+func TestReasoningAndDashboard(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "settings.json", `{}`)
+	writeHomeFile(t, home, "config.yaml", "display:\n  show_reasoning: false\nagent:\n  reasoning_effort: medium\nwebui:\n  dashboard:\n    enabled: always\n    url: http://127.0.0.1:8787\n")
+	aux := auxRequest(t, home, "GET", "/api/reasoning", "")
+	var m map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["show_reasoning"] != false {
+		t.Errorf("expected show_reasoning=false, got %v", m["show_reasoning"])
+	}
+	if m["reasoning_effort"] != "medium" {
+		t.Errorf("expected reasoning_effort=medium, got %v", m["reasoning_effort"])
+	}
+	if m["supports_reasoning_effort"] != true {
+		t.Errorf("expected supports_reasoning_effort=true, got %v", m["supports_reasoning_effort"])
+	}
+
+	aux = auxRequest(t, home, "POST", "/api/reasoning", `{"effort":"high"}`)
+	var m2 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m2); err != nil {
+		t.Fatal(err)
+	}
+	if m2["reasoning_effort"] != "high" {
+		t.Errorf("expected reasoning_effort=high after POST, got %v", m2["reasoning_effort"])
+	}
+
+	aux = auxRequest(t, home, "POST", "/api/reasoning", `{"display":"show"}`)
+	var m3 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m3); err != nil {
+		t.Fatal(err)
+	}
+	if m3["show_reasoning"] != true {
+		t.Errorf("expected show_reasoning=true after POST, got %v", m3["show_reasoning"])
+	}
+
+	aux = auxRequest(t, home, "GET", "/api/dashboard/config", "")
+	var m4 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m4); err != nil {
+		t.Fatal(err)
+	}
+	if m4["enabled"] != "always" {
+		t.Errorf("expected dashboard enabled=always, got %v", m4["enabled"])
+	}
+
+	aux = auxRequest(t, home, "GET", "/api/dashboard/status", "")
+	var m5 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m5); err != nil {
+		t.Fatal(err)
+	}
+	if m5["enabled"] != "always" {
+		t.Errorf("expected dashboard status enabled=always, got %v", m5["enabled"])
+	}
+
+	// /api/projects — empty state dir, all_profiles default
+	aux = auxRequest(t, home, "GET", "/api/projects", "")
+	var m6 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m6); err != nil {
+		t.Fatal(err)
+	}
+	if m6["active_profile"] != "default" {
+		t.Errorf("expected active_profile=default, got %v", m6["active_profile"])
+	}
+
+	// /api/projects with rows + profile scoping
+	writeHomeFile(t, home, "state/projects.json", `[{"id":"p1","name":"one","profile":"default"},{"id":"p2","name":"two","profile":"other"}]`)
+	aux = auxRequest(t, home, "GET", "/api/projects", "")
+	var m7 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m7); err != nil {
+		t.Fatal(err)
+	}
+	projs, _ := m7["projects"].([]any)
+	if len(projs) != 1 {
+		t.Errorf("expected 1 scoped project, got %d (%v)", len(projs), m7["projects"])
+	}
+	if m7["other_profile_count"] != float64(1) {
+		t.Errorf("expected other_profile_count=1, got %v", m7["other_profile_count"])
+	}
+	aux = auxRequest(t, home, "GET", "/api/projects?all_profiles=1", "")
+	var m8 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m8); err != nil {
+		t.Fatal(err)
+	}
+	projs8, _ := m8["projects"].([]any)
+	if len(projs8) != 2 {
+		t.Errorf("expected 2 projects with all_profiles=1, got %d", len(projs8))
+	}
+}
+
 func TestProvidersSetKey(t *testing.T) {
 	home := t.TempDir()
 	writeHomeFile(t, home, ".env", "# my env\nexisting=1\n")

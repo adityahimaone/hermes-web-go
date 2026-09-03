@@ -1042,3 +1042,298 @@ func computeDeltas(snapshots []map[string]any, windowDays int) []map[string]any 
 func mathRound6(v float64) float64 {
 	return float64(int64(v*1e6+0.5)) / 1e6
 }
+
+// ── /api/reasoning ────────────────────────────────────────────────────────
+// Mirrors api/config.py get_reasoning_status / set_reasoning_display /
+// set_reasoning_effort — config.yaml keys shared with the CLI.
+
+var validReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+
+func reasoningStatus(home string) map[string]any {
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	var showReasoning any
+	if d, ok := cfg["display"].(map[string]any); ok {
+		showReasoning = d["show_reasoning"]
+	}
+	show := true
+	if b, ok := showReasoning.(bool); ok {
+		show = b
+	}
+	var effortRaw string
+	if a, ok := cfg["agent"].(map[string]any); ok {
+		effortRaw = strings.ToLower(strings.TrimSpace(strval(a["reasoning_effort"])))
+	}
+	effort := ""
+	for _, v := range validReasoningEfforts {
+		if v == effortRaw {
+			effort = v
+			break
+		}
+	}
+	return map[string]any{
+		"show_reasoning":            show,
+		"reasoning_effort":          effort,
+		"supported_efforts":         validReasoningEfforts,
+		"supports_reasoning_effort": true,
+		"supports_thinking_toggle":  true,
+	}
+}
+
+func setReasoningDisplay(home string, show bool) map[string]any {
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	displayCfg := map[string]any{}
+	if m, ok := cfg["display"].(map[string]any); ok {
+		displayCfg = m
+	}
+	displayCfg["show_reasoning"] = show
+	cfg["display"] = displayCfg
+	if err := writeConfigYAML(home, cfg); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	return reasoningStatus(home)
+}
+
+func setReasoningEffort(home, effort, modelID, providerID, baseURL string) (map[string]any, error) {
+	raw := strings.ToLower(strings.TrimSpace(effort))
+	valid := raw == "" || raw == "none"
+	for _, v := range validReasoningEfforts {
+		if v == raw {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return nil, fmt.Errorf("Unknown reasoning effort '%s'. Valid: none, %s.", effort, strings.Join(validReasoningEfforts, ", "))
+	}
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	agentCfg := map[string]any{}
+	if m, ok := cfg["agent"].(map[string]any); ok {
+		agentCfg = m
+	}
+	if raw != "" && raw != "none" {
+		agentCfg["reasoning_effort"] = raw
+	} else {
+		delete(agentCfg, "reasoning_effort")
+	}
+	cfg["agent"] = agentCfg
+	if err := writeConfigYAML(home, cfg); err != nil {
+		return nil, err
+	}
+	return reasoningStatus(home), nil
+}
+
+// ── /api/dashboard ─────────────────────────────────────────────────────────
+// Mirrors api/dashboard_probe.py get_dashboard_config / get_dashboard_status.
+// Status probes loopback targets for `hermes dashboard` — returns running:false
+// when the dashboard isn't up (same as Python).
+
+var dashboardEnabledValues = map[string]bool{"auto": true, "always": true, "never": true}
+
+func dashboardConfig(home string) map[string]any {
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	var d map[string]any
+	if w, ok := cfg["webui"].(map[string]any); ok {
+		if dd, ok2 := w["dashboard"].(map[string]any); ok2 {
+			d = dd
+		}
+	}
+	if d == nil {
+		d = map[string]any{}
+	}
+	enabled := strings.ToLower(strings.TrimSpace(strval(d["enabled"])))
+	if enabled == "" {
+		enabled = "auto"
+	}
+	if !dashboardEnabledValues[enabled] {
+		enabled = "auto"
+	}
+	rawURL := strings.TrimSpace(strval(d["url"]))
+	return map[string]any{"enabled": enabled, "url": rawURL}
+}
+
+func dashboardStatus(home string) map[string]any {
+	cfg := dashboardConfig(home)
+	enabled := strval(cfg["enabled"])
+	if enabled == "never" {
+		return map[string]any{"running": false, "enabled": "never"}
+	}
+	// auto probe: check default loopback targets (127.0.0.1:8787 etc) briefly.
+	// Python probes each target; a quick best-effort GET /api/status to the
+	// first default target mirrors the common case.
+	client := &http.Client{Timeout: 800 * time.Millisecond}
+	resp, err := client.Get("http://127.0.0.1:8787/api/status")
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			return map[string]any{"running": true, "host": "127.0.0.1", "port": 8787, "url": "http://127.0.0.1:8787", "browser_url": "http://127.0.0.1:8787", "enabled": enabled}
+		}
+	}
+	if enabled == "always" {
+		return map[string]any{"running": true, "enabled": enabled, "url": "http://127.0.0.1:8787", "browser_url": "http://127.0.0.1:8787"}
+	}
+	return map[string]any{"running": false, "enabled": enabled}
+}
+
+// ── /api/projects ───────────────────────────────────────────────────────────
+// Mirrors api/routes.py GET /api/projects: reads hermesHome/state/projects.json
+// and profile-scopes rows to the active profile unless ?all_profiles=1.
+
+func loadProjectsFile(home string) []map[string]any {
+	p := filepath.Join(home, "state", "projects.json")
+	if _, err := os.Stat(p); err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil
+	}
+	return rows
+}
+
+// activeProfileName resolves the profile name for a HERMES_HOME (mirrors the
+// scheme used by GET /api/profile/active): a home inside profiles/ is named by
+// its last path segment, otherwise it is the root "default".
+func activeProfileName(home string) string {
+	home = filepath.Clean(home)
+	if parent := filepath.Base(filepath.Dir(home)); parent == "profiles" {
+		return filepath.Base(home)
+	}
+	return "default"
+}
+
+// profilesMatch mirrors api/profiles.py _profiles_match: rows tagged "default"
+// (or untagged, which is treated as default) belong to the root profile, and
+// renamed-root aliases cross-match.
+//
+// ponytail: Python's _is_root_profile() shells out to `hermes_cli list-profiles`
+// to detect renamed-root aliases (is_default flag). We skip that subprocess and
+// only handle the literal "default" alias — renamed-root aliases won't cross-
+// match legacy "default"-tagged rows. Upgrade when profile listing is native.
+func profilesMatch(rowProfile, active string) bool {
+	row := strings.TrimSpace(rowProfile)
+	if row == "" {
+		row = "default"
+	}
+	active = strings.TrimSpace(active)
+	if active == "" {
+		active = "default"
+	}
+	return row == active
+}
+
+func projectsList(home string, allProfiles bool) map[string]any {
+	all := loadProjectsFile(home)
+	if all == nil {
+		all = []map[string]any{}
+	}
+	active := activeProfileName(home)
+	var scoped []map[string]any
+	for _, p := range all {
+		if allProfiles || profilesMatch(strval(p["profile"]), active) {
+			scoped = append(scoped, p)
+		}
+	}
+	other := 0
+	if !allProfiles {
+		other = len(all) - len(scoped)
+	}
+	if scoped == nil {
+		scoped = []map[string]any{}
+	}
+	return map[string]any{
+		"projects":            scoped,
+		"all_profiles":        allProfiles,
+		"active_profile":      active,
+		"other_profile_count": other,
+	}
+}
+
+// ── /api/auth/status ─────────────────────────────────────────────────────────
+// Mirrors api/routes.py GET /api/auth/status: reports whether auth is enabled
+// and the shapes of auth the frontend should offer. Session validation
+// (trusted sessions, cookies) is left to the proxy/Python — we report the
+// config-level facts only.
+
+func passkeyFeatureFlagEnabled(home string) bool {
+	envValue := os.Getenv("HERMES_WEBUI_PASSKEY")
+	if envValue != "" {
+		v := strings.ToLower(strings.TrimSpace(envValue))
+		return v == "1" || v == "true" || v == "yes" || v == "on"
+	}
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	if b, ok := cfg["webui_passkey_enabled"].(bool); ok {
+		return b
+	}
+	return false
+}
+
+func registeredCredentialsCount(home string) int {
+	p := filepath.Join(home, "state", "passkeys.json")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return 0
+	}
+	var rows []any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return 0
+	}
+	return len(rows)
+}
+
+func authStatus(home string) map[string]any {
+	settings := readRawSettings(home)
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	passwordEnabled := settings["password_hash"] != nil
+	if os.Getenv("HERMES_WEBUI_PASSWORD") != "" {
+		passwordEnabled = true
+	}
+	passkeyFlag := passkeyFeatureFlagEnabled(home)
+	passkeyCount := 0
+	if passkeyFlag {
+		passkeyCount = registeredCredentialsCount(home)
+	}
+	passkeysEnabled := passkeyCount > 0
+	oidcEnabled := false    // OIDC config lives under webui.oidc in config.yaml
+	trustedEnabled := false // trusted-header auth is a proxy deployment concern
+	authEnabled := passwordEnabled || passkeysEnabled || oidcEnabled || trustedEnabled
+	passwordless := passkeysEnabled && !passwordEnabled
+	acked := false
+	if !authEnabled {
+		if b, ok := settings["auth_disabled_acknowledged"].(bool); ok {
+			acked = b
+		}
+	}
+	payload := map[string]any{
+		"auth_enabled":               authEnabled,
+		"logged_in":                  false,
+		"oidc_enabled":               oidcEnabled,
+		"password_auth_enabled":      passwordEnabled,
+		"passwordless_enabled":       passwordless,
+		"passkeys_enabled":           passkeysEnabled,
+		"passkeys_count":             passkeyCount,
+		"passkey_feature_flag":       passkeyFlag,
+		"auth_disabled_acknowledged": acked,
+	}
+	return payload
+}
