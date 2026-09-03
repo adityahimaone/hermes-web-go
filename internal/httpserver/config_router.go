@@ -134,10 +134,26 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 			writeError(w, http.StatusBadRequest, "scope is required")
 			return
 		}
+		if scope == "main" {
+			modelID := strval(body["model"])
+			provider := strval(body["provider"])
+			if provider == "" || provider == "auto" {
+				provider = ""
+			}
+			var advanced map[string]any
+			if adv, ok := body["advanced"].(map[string]any); ok {
+				advanced = adv
+			}
+			resp, err := setMainModel(home, modelID, provider, advanced)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, resp)
+			return
+		}
 		if scope != "auxiliary" {
-			// Main-model set needs set_hermes_default_model (fast-mode overrides,
-			// service-tier resolution) — deferred with the models family.
-			writeError(w, http.StatusNotImplemented, "scope=main requires the models module port; use auxiliary")
+			writeError(w, http.StatusBadRequest, "unknown scope: "+scope)
 			return
 		}
 		task := strval(body["task"])
@@ -207,6 +223,169 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 			return
 		}
 		writeJSON(w, resp)
+	})
+
+	r.Post("/api/profile/create", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		// Isolated profile mode is not detectable from the Go side cheaply —
+		// Go deploy pins HERMES_HOME per profile, so creation is always allowed.
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		name := strings.TrimSpace(strval(body["name"]))
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if !profileNameRe.MatchString(name) {
+			writeError(w, http.StatusBadRequest, "Invalid profile name: lowercase letters, numbers, hyphens, underscores only")
+			return
+		}
+		cloneFrom := strval(body["clone_from"])
+		if cloneFrom != "" && !profileNameRe.MatchString(cloneFrom) {
+			writeError(w, http.StatusBadRequest, "Invalid clone_from name")
+			return
+		}
+		baseURL := strval(body["base_url"])
+		if baseURL != "" && !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+			writeError(w, http.StatusBadRequest, "base_url must start with http:// or https://")
+			return
+		}
+		apiKey := strval(body["api_key"])
+		defaultModel := strval(body["default_model"])
+		modelProvider := strval(body["model_provider"])
+		cloneConfig, _ := body["clone_config"].(bool)
+
+		prof, err := createProfile(home, name, cloneFrom, cloneConfig, baseURL, apiKey, defaultModel, modelProvider)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "profile": prof})
+	})
+
+	r.Post("/api/profile/switch", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		name := strings.TrimSpace(strval(body["name"]))
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if name != "default" && !profileNameRe.MatchString(name) {
+			writeError(w, http.StatusBadRequest, "Invalid profile name")
+			return
+		}
+		if !profileDirExists(home, name) {
+			writeError(w, http.StatusNotFound, "Profile not found: "+name)
+			return
+		}
+		resp := switchProfileCookie(home, name, req)
+		writeJSON(w, resp)
+	})
+
+	r.Post("/api/profile/update", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		name := strings.TrimSpace(strval(body["name"]))
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		profDir, err := profileDir(home, name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		defaultModel := strval(body["default_model"])
+		modelProvider := strval(body["model_provider"])
+		baseURL := strval(body["base_url"])
+		if baseURL != "" && !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+			writeError(w, http.StatusBadRequest, "base_url must start with http:// or https://")
+			return
+		}
+		defaultModel, modelProvider = splitWebUIProviderModel(defaultModel, modelProvider)
+		if defaultModel != "" || modelProvider != "" {
+			if err := writeModelDefaultsToConfig(profDir, defaultModel, modelProvider); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if baseURL != "" {
+			if err := writeEndpointToConfig(profDir, baseURL); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		effectiveDefault, effectiveProvider, effectiveBase := readModelConfig(profDir)
+		writeJSON(w, map[string]any{
+			"ok":            true,
+			"profile":       map[string]any{"name": name, "path": profDir},
+			"default_model": effectiveDefault,
+			"provider":      effectiveProvider,
+			"base_url":      effectiveBase,
+		})
+	})
+
+	r.Post("/api/profile/delete", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		name := strings.TrimSpace(strval(body["name"]))
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if name == "default" {
+			writeError(w, http.StatusBadRequest, "Cannot delete the default profile.")
+			return
+		}
+		if !profileNameRe.MatchString(name) {
+			writeError(w, http.StatusBadRequest, "Invalid profile name")
+			return
+		}
+		profDir, err := profileDir(home, name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Profile not found: "+name)
+			return
+		}
+		// Active profile check — Go deploy pins HERMES_HOME, so the active
+		// profile is the current home's basename; deleting it is refused.
+		active := filepath.Base(home)
+		if filepath.Base(filepath.Dir(home)) == "profiles" && active == name {
+			writeError(w, http.StatusConflict, "Cannot delete active profile")
+			return
+		}
+		if err := os.RemoveAll(profDir); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "name": name})
 	})
 }
 
@@ -1474,6 +1653,556 @@ func setMapAny(mapping *yaml.Node, key string, value any) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		vnode,
 	)
+}
+
+// setMainModel mirrors api/config.py set_hermes_default_model (subset: no
+// collision guards / portal codex exception / local-server detect — see
+// progress-log slice 6 known gaps). Persists model.default/provider/base_url
+// into config.yaml and returns {ok, model, provider}.
+func setMainModel(home, modelID, provider string, advanced map[string]any) (map[string]any, error) {
+	selectedModel := strings.TrimSpace(modelID)
+	if selectedModel == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	configPath := filepath.Join(home, "config.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config.yaml: %w", err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+	doc := root.Content[0]
+
+	modelNode := findMapKey(doc, "model")
+	if modelNode == nil || modelNode.Kind != yaml.MappingNode {
+		modelNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if findMapKey(doc, "model") == nil {
+			doc.Content = append(doc.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "model"}, modelNode)
+		}
+	}
+	previousProvider := ""
+	if pp := findMapKey(modelNode, "provider"); pp != nil {
+		previousProvider = strings.TrimSpace(pp.Value)
+	}
+
+	resolvedModel, resolvedProvider, resolvedBaseURL := resolveMainModelProvider(doc, selectedModel, previousProvider)
+	persistedModel := selectedModel
+	if resolvedModel != "" {
+		persistedModel = resolvedModel
+	}
+	persistedProvider := provider
+	if persistedProvider == "" {
+		persistedProvider = resolvedProvider
+	}
+	if persistedProvider == "" {
+		persistedProvider = previousProvider
+	}
+	providerOverrideWon := provider != "" && provider != resolvedProvider
+	if strings.EqualFold(persistedProvider, "local") {
+		persistedProvider = "custom" // #1384
+	}
+
+	setMapScalar(modelNode, "default", persistedModel)
+	if persistedProvider != "" {
+		setMapScalar(modelNode, "provider", persistedProvider)
+	}
+	if resolvedBaseURL != "" && !providerOverrideWon {
+		setMapScalar(modelNode, "base_url", strings.TrimRight(resolvedBaseURL, "/"))
+	} else if persistedProvider != previousProvider {
+		if persistedProvider == "openai" {
+			setMapScalar(modelNode, "base_url", "https://api.openai.com/v1")
+		} else {
+			removeMapKey(modelNode, "base_url")
+		}
+	}
+	if advanced != nil {
+		if err := applyAdvancedModelOptions(modelNode, advanced); err != nil {
+			return nil, err
+		}
+	}
+	if !_mainModelSupportsServiceTier(persistedModel, persistedProvider) {
+		removeMapKey(modelNode, "service_tier")
+	}
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config.yaml: %w", err)
+	}
+	if err := os.WriteFile(configPath+".tmp", out, 0o644); err != nil {
+		return nil, fmt.Errorf("failed to write config.yaml: %w", err)
+	}
+	if err := os.Rename(configPath+".tmp", configPath); err != nil {
+		return nil, fmt.Errorf("failed to replace config.yaml: %w", err)
+	}
+	persistedProviderOut := persistedProvider
+	return map[string]any{"ok": true, "model": persistedModel, "provider": persistedProviderOut}, nil
+}
+
+// resolveMainModelProvider is a pragmatic subset of api/config.py
+// resolve_model_provider: handles @provider:model, provider/model slash
+// (openrouter + custom-name prefix + known prefix strip), and custom_providers
+// name matches. Falls back to the caller's provider/previous provider.
+func resolveMainModelProvider(doc *yaml.Node, modelID, previousProvider string) (model, provider, baseURL string) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return "", "", ""
+	}
+	modelCfg := findMapKey(doc, "model")
+	configProvider := previousProvider
+	configBaseURL := ""
+	if modelCfg != nil && modelCfg.Kind == yaml.MappingNode {
+		if pn := findMapKey(modelCfg, "provider"); pn != nil {
+			configProvider = strings.TrimSpace(pn.Value)
+		}
+		if bn := findMapKey(modelCfg, "base_url"); bn != nil {
+			configBaseURL = strings.TrimSpace(bn.Value)
+		}
+	}
+	if configProvider == "local" {
+		configProvider = "custom"
+	}
+
+	// @provider:model — explicit provider hint from the dropdown.
+	if strings.HasPrefix(modelID, "@") && strings.Contains(modelID, ":") {
+		modelID = modelID[1:]
+		idx := strings.LastIndex(modelID, ":")
+		bare := modelID[idx+1:]
+		hint := modelID[:idx]
+		// :free / :beta / :thinking tags — peel one segment back when the hint
+		// ends in ":tokens" (#1744-ish). Fall back to split(":") when rsplit
+		// doesn't look like a recognised provider.
+		if strings.HasPrefix(hint, "custom:") {
+			seg := strings.Split(hint, ":")
+			// custom:<slug>:model:free → hint should be custom:<slug>
+			if len(seg) > 2 {
+				hint = seg[0] + ":" + seg[1]
+			}
+		}
+		if hint == "" || bare == "" {
+			return modelID, hint, ""
+		}
+		bu := providerBaseURLForHint(doc, hint)
+		return bare, hint, bu
+	}
+
+	// Custom providers declared in config.yaml win over slash heuristics.
+	if cps := findMapKey(doc, "custom_providers"); cps != nil && cps.Kind == yaml.SequenceNode {
+		for _, entry := range cps.Content {
+			if entry.Kind != yaml.MappingNode {
+				continue
+			}
+			entryModel := ""
+			if mn := findMapKey(entry, "model"); mn != nil {
+				entryModel = strings.TrimSpace(mn.Value)
+			}
+			name := ""
+			if nn := findMapKey(entry, "name"); nn != nil {
+				name = strings.TrimSpace(nn.Value)
+			}
+			owns := entryModel == modelID
+			if !owns {
+				if ms := findMapKey(entry, "models"); ms != nil && ms.Kind == yaml.SequenceNode {
+					for _, m := range ms.Content {
+						if m.Value == modelID {
+							owns = true
+							break
+						}
+					}
+				}
+			}
+			if owns && name != "" {
+				bu := ""
+				if bn := findMapKey(entry, "base_url"); bn != nil {
+					bu = strings.TrimSpace(bn.Value)
+				}
+				return modelID, slugify(name), bu
+			}
+		}
+	}
+
+	// providers.<slug>.models allowlist scan.
+	if provs := findMapKey(doc, "providers"); provs != nil && provs.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(provs.Content); i += 2 {
+			slug := provs.Content[i].Value
+			pdef := provs.Content[i+1]
+			if pdef.Kind != yaml.MappingNode {
+				continue
+			}
+			ms := findMapKey(pdef, "models")
+			if ms == nil || ms.Kind != yaml.SequenceNode {
+				continue
+			}
+			for _, m := range ms.Content {
+				if m.Value == modelID {
+					bu := ""
+					if bn := findMapKey(pdef, "base_url"); bn != nil {
+						bu = strings.TrimSpace(bn.Value)
+					}
+					return modelID, slug, bu
+				}
+			}
+		}
+	}
+
+	// slash form: prefix/model
+	if strings.Contains(modelID, "/") {
+		prefix, bare := modelID, modelID
+		if idx := strings.Index(modelID, "/"); idx > 0 {
+			prefix, bare = modelID[:idx], modelID[idx+1:]
+		}
+		if configProvider == "openrouter" {
+			return modelID, "openrouter", configBaseURL
+		}
+		if parser := findMapKey(doc, "custom_providers"); parser != nil && parser.Kind == yaml.SequenceNode {
+			for _, entry := range parser.Content {
+				if entry.Kind != yaml.MappingNode {
+					continue
+				}
+				nn := findMapKey(entry, "name")
+				if nn != nil && strings.TrimSpace(nn.Value) == prefix {
+					bu := ""
+					if bn := findMapKey(entry, "base_url"); bn != nil {
+						bu = strings.TrimSpace(bn.Value)
+					}
+					return modelID, slugify(strings.TrimSpace(nn.Value)), bu
+				}
+			}
+		}
+		if configProvider != "" && prefix == configProvider {
+			return bare, configProvider, configBaseURL
+		}
+		// unknown prefix + no base_url → route through config provider,
+		// keeping the full slash id (OpenRouter-style).
+		if configBaseURL == "" {
+			return modelID, configProvider, ""
+		}
+		// base_url configured → strip prefix only for known provider namespaces.
+		if providerEnvVar(configProvider) != "" || configProvider == "custom" {
+			return bare, configProvider, configBaseURL
+		}
+		// named custom provider without a slash entry → keep full id.
+		return modelID, configProvider, configBaseURL
+	}
+
+	// bare model → config provider/base_url.
+	return modelID, configProvider, configBaseURL
+}
+
+// providerBaseURLForHint resolves base_url for an @provider:model hint:
+// named custom providers get their own entry's base_url; openai gets the
+// canonical endpoint; everything else falls back to the model's current
+// config base_url.
+func providerBaseURLForHint(doc *yaml.Node, hint string) string {
+	if strings.HasPrefix(hint, "custom:") {
+		slug := strings.TrimPrefix(hint, "custom:")
+		if cps := findMapKey(doc, "custom_providers"); cps != nil && cps.Kind == yaml.SequenceNode {
+			for _, entry := range cps.Content {
+				if entry.Kind != yaml.MappingNode {
+					continue
+				}
+				nn := findMapKey(entry, "name")
+				sl := findMapKey(entry, "slug")
+				name := ""
+				if nn != nil {
+					name = strings.TrimSpace(nn.Value)
+				}
+				matches := sl != nil && strings.TrimSpace(sl.Value) == slug
+				if nn != nil {
+					matches = matches || slugify(name) == slug || strings.EqualFold(name, slug) || strings.EqualFold(strings.ReplaceAll(name, " ", "-"), slug)
+				}
+				if matches {
+					if bn := findMapKey(entry, "base_url"); bn != nil {
+						return strings.TrimSpace(bn.Value)
+					}
+					return ""
+				}
+			}
+		}
+		return ""
+	}
+	if hint == "openai" {
+		return "https://api.openai.com/v1"
+	}
+	if mc := findMapKey(doc, "model"); mc != nil && mc.Kind == yaml.MappingNode {
+		if bn := findMapKey(mc, "base_url"); bn != nil {
+			return strings.TrimSpace(bn.Value)
+		}
+	}
+	return ""
+}
+
+var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// profileRoot returns the profiles directory under hermesHome (or the home
+// itself when the current home is already a profile).
+func profileRoot(home string) string {
+	if filepath.Base(filepath.Dir(home)) == "profiles" {
+		return filepath.Dir(home)
+	}
+	return filepath.Join(home, "profiles")
+}
+
+// profileDir resolves a profile's directory (default → home root).
+func profileDir(home, name string) (string, error) {
+	if name == "default" {
+		if filepath.Base(filepath.Dir(home)) == "profiles" {
+			return filepath.Dir(home), nil
+		}
+		return home, nil
+	}
+	if !profileNameRe.MatchString(name) {
+		return "", fmt.Errorf("Invalid profile name")
+	}
+	dir := filepath.Join(profileRoot(home), name)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("Profile '%s' does not exist.", name)
+	}
+	return dir, nil
+}
+
+func profileDirExists(home, name string) bool {
+	if name == "default" {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(profileRoot(home), name))
+	return err == nil
+}
+
+// splitWebUIProviderModel mirrors api/profiles.py _split_webui_provider_model_value:
+// splits "@provider:model" values into bare model + provider.
+func splitWebUIProviderModel(model, provider string) (string, string) {
+	model = strings.TrimSpace(model)
+	provider = strings.TrimSpace(provider)
+	if model != "" && strings.HasPrefix(model, "@") && strings.Contains(model, ":") {
+		rest := model[1:]
+		idx := strings.LastIndex(rest, ":")
+		if idx > 0 {
+			bare := rest[idx+1:]
+			hint := rest[:idx]
+			if strings.HasPrefix(hint, "custom:") {
+				seg := strings.SplitN(hint, ":", 3)
+				if len(seg) > 2 {
+					hint = seg[0] + ":" + seg[1]
+				}
+			}
+			if provider == "" {
+				provider = hint
+			}
+			model = bare
+		}
+	}
+	return strings.TrimSpace(model), strings.TrimSpace(provider)
+}
+
+// cleanProfileConfigValue mirrors _clean_profile_config_value: single-line,
+// max 512 chars.
+func cleanProfileConfigValue(value, field string) (string, error) {
+	cleaned := strings.TrimSpace(value)
+	if cleaned == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(cleaned, "\x00\r\n") {
+		return "", fmt.Errorf("%s must be a single-line value", field)
+	}
+	if len(cleaned) > 512 {
+		return "", fmt.Errorf("%s is too long", field)
+	}
+	return cleaned, nil
+}
+
+// writeModelDefaultsToConfig mirrors _write_model_defaults_to_config.
+func writeModelDefaultsToConfig(profileDir, defaultModel, modelProvider string) error {
+	defaultModel, modelProvider = splitWebUIProviderModel(defaultModel, modelProvider)
+	var err error
+	defaultModel, err = cleanProfileConfigValue(defaultModel, "default_model")
+	if err != nil {
+		return err
+	}
+	modelProvider, err = cleanProfileConfigValue(modelProvider, "model_provider")
+	if err != nil {
+		return err
+	}
+	if defaultModel == "" && modelProvider == "" {
+		return nil
+	}
+	cfg, err := readProfileConfig(profileDir)
+	if err != nil {
+		return err
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc == nil {
+		mc = map[string]any{}
+	}
+	if defaultModel != "" {
+		mc["default"] = defaultModel
+	}
+	if modelProvider != "" {
+		mc["provider"] = modelProvider
+	}
+	cfg["model"] = mc
+	return writeProfileConfig(profileDir, cfg)
+}
+
+// writeEndpointToConfig mirrors _write_endpoint_to_config.
+func writeEndpointToConfig(profileDir, baseURL string) error {
+	cfg, err := readProfileConfig(profileDir)
+	if err != nil {
+		return err
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc == nil {
+		mc = map[string]any{}
+	}
+	mc["base_url"] = baseURL
+	cfg["model"] = mc
+	return writeProfileConfig(profileDir, cfg)
+}
+
+// readModelConfig reads model.default/provider/base_url back from config.yaml.
+func readModelConfig(profileDir string) (model, provider, baseURL string) {
+	cfg, err := readProfileConfig(profileDir)
+	if err != nil {
+		return "", "", ""
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc == nil {
+		return "", "", ""
+	}
+	return strval(mc["default"]), strval(mc["provider"]), strval(mc["base_url"])
+}
+
+// readProfileConfig loads a profile's config.yaml (missing → empty map).
+func readProfileConfig(profileDir string) (map[string]any, error) {
+	raw, err := os.ReadFile(filepath.Join(profileDir, "config.yaml"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]any{}, nil
+		}
+		return nil, err
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return map[string]any{}, nil
+	}
+	return cfg, nil
+}
+
+// writeProfileConfig persists map into config.yaml atomically.
+func writeProfileConfig(profileDir string, cfg map[string]any) error {
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(profileDir, "config.yaml")
+	if err := os.WriteFile(configPath+".tmp", out, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(configPath+".tmp", configPath)
+}
+
+// createProfile mirrors api/profiles.py create_profile_api (fallback path,
+// no hermes_cli): mkdir profile dir, optional clone (copy config.yaml +
+// skills), seed nothing, write base_url/model defaults/api key.
+func createProfile(home, name, cloneFrom string, cloneConfig bool, baseURL, apiKey, defaultModel, modelProvider string) (map[string]any, error) {
+	root := profileRoot(home)
+	profDir := filepath.Join(root, name)
+
+	// clone from an existing profile (default = home root)
+	if cloneFrom != "" {
+		src, err := profileDir(home, cloneFrom)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(profDir, 0o755); err != nil {
+			return nil, err
+		}
+		// copy config.yaml
+		if raw, err := os.ReadFile(filepath.Join(src, "config.yaml")); err == nil {
+			if err := os.WriteFile(filepath.Join(profDir, "config.yaml"), raw, 0o644); err != nil {
+				return nil, err
+			}
+		}
+		// copy skills tree when cloning config
+		if cloneConfig {
+			if err := copyTree(filepath.Join(src, "skills"), filepath.Join(profDir, "skills")); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if _, err := os.Stat(profDir); err == nil {
+			return nil, fmt.Errorf("Profile '%s' already exists.", name)
+		}
+		if err := os.MkdirAll(profDir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	defaultModel, modelProvider = splitWebUIProviderModel(defaultModel, modelProvider)
+	if baseURL != "" {
+		if err := writeEndpointToConfig(profDir, baseURL); err != nil {
+			return nil, err
+		}
+	}
+	if defaultModel != "" || modelProvider != "" {
+		if err := writeModelDefaultsToConfig(profDir, defaultModel, modelProvider); err != nil {
+			return nil, err
+		}
+	}
+	if apiKey != "" {
+		envVar := providerEnvVar(modelProvider)
+		if envVar == "" {
+			envVar = "HERMES_API_KEY"
+		}
+		if err := writeEnvFile(profDir, envVar, apiKey); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(filepath.Join(profDir, ".env"), 0o600); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{
+		"name":            name,
+		"path":            profDir,
+		"is_default":      false,
+		"is_active":       false,
+		"gateway_running": false,
+	}, nil
+}
+
+// copyTree recursively copies src dir into dst.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, path[len(src):]), 0o755)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(dst, path[len(src):]), raw, 0o644)
+	})
+}
+
+// switchProfileCookie mirrors the response part of /api/profile/switch: the
+// Go side sets the hermes_profile cookie (per-client profile is managed via
+// cookie in Python; Go deploy pins HERMES_HOME so the cookie is advisory).
+func switchProfileCookie(home, name string, req *http.Request) map[string]any {
+	active := filepath.Base(home)
+	if filepath.Base(filepath.Dir(home)) != "profiles" {
+		active = "default"
+	}
+	return map[string]any{
+		"ok":     true,
+		"name":   name,
+		"active": active,
+	}
 }
 
 // providerEnvVar mirrors api/providers.py _PROVIDER_ENV_VAR (canonical key name).

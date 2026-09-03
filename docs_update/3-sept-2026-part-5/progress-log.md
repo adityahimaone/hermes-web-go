@@ -253,6 +253,51 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   `TestProvidersDeleteKeepsOtherModelKey` (active-provider guard keeps
   unrelated model.api_key).
 
+## Family-2 main-model set + profile mutations native — slice 6 (2026-09-03, ninth pass)
+
+## What was done
+- `POST /api/model/set` scope=main now native (was 501) — mirrors
+  `set_hermes_default_model` (api/config.py:4780) with a pragmatic subset of
+  `resolve_model_provider`: `@provider:model` rsplit (custom: multi-segment
+  peel), custom_providers owns-model first-match, providers.<slug>.models
+  allowlist, slash heuristic (openrouter keeps full path, known-prefix strip,
+  custom-name prefix → `custom:<slug>`), bare model → config provider.
+  base_url rules: resolved URL wins unless provider override, openai →
+  https://api.openai.com/v1, provider change drops stale base_url (#4728-ish),
+  `local`→`custom` (#1384), advanced options, service_tier pop, atomic
+  comment-preserving config.yaml write. Known gaps (documented): collision
+  guards, portal providers (nous/opencode/nvidia), openai-codex sighandler
+  exception, local-server loopback detect — deferred.
+- `POST /api/profile/create` native — mirrors `create_profile_api` fallback
+  (no hermes_cli): name regex validation, clone_from (copy config.yaml +
+  skills), base_url/model defaults/api key (.env 0600) writes, list cache
+  bust. Isolated-mode reject skipped (Go pins HERMES_HOME).
+- `POST /api/profile/switch` native — name validation + dir existence check;
+  response `{ok, name, active}`. Set-Cookie hermes_profile skipped — Go
+  deploy pins HERMES_HOME, cookie advisory in Python.
+- `POST /api/profile/update` native — mirrors `update_profile_api`: model
+  defaults + base_url patch with @provider:model split, single-line/512-char
+  clean, read-back response `{ok, profile, default_model, provider, base_url}`.
+- `POST /api/profile/delete` native — mirrors `delete_profile_api` fallback:
+  default rejected, name regex, dir must exist, active-profile refuse
+  (Go-pinned HERMES_HOME), os.RemoveAll dir + cache bust.
+- Registered all 4 + updated `/api/model/set` registration (no method change
+  — already POST) in `internal/proxy/registry.go`.
+
+## Verification evidence (fresh, this run)
+- `go build ./...`, `go vet ./...`, `git diff --check` — all PASS.
+- `go test ./...` — PASS (all packages).
+- `go test -race ./internal/httpserver/` — PASS.
+- New regressions `config_router_test.go`: `TestAuxiliarySetMainScopeDeferred`
+  (flipped: main now 200 + openai base_url), `TestMainModelAtProviderPrefix`
+  (@custom:name → bare model + custom provider + base_url),
+  `TestMainModelSlashOpenRouter` (full path kept), `TestMainModelProvider
+  ChangeDropsBaseURL` (provider switch drops stale base_url),
+  `TestProfileCreate` / `TestProfileCreateInvalidName` / `TestProfileCreate
+  Duplicate`, `TestProfileSwitchNotFound` / `TestProfileSwitchOK`,
+  `TestProfileUpdate` (default+provider+base_url), `TestProfileDelete` /
+  `TestProfileDeleteDefaultRejected`.
+
 ---
 
 ## Family-1 session lifecycle native (2026-09-03, fourth pass)

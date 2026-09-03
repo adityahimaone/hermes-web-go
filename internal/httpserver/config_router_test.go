@@ -667,8 +667,82 @@ func TestAuxiliarySetMainScopeDeferred(t *testing.T) {
 	home := t.TempDir()
 	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
 	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"main","model":"gpt-5","provider":"openai"}`)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (main scope now native)", rr.Code)
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["default"] != "gpt-5" || mc["provider"] != "openai" {
+		t.Errorf("model = %v, want gpt-5/openai", mc)
+	}
+	if mc["base_url"] != "https://api.openai.com/v1" {
+		t.Errorf("base_url = %v, want openai endpoint", mc["base_url"])
+	}
+}
+
+func TestMainModelAtProviderPrefix(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\ncustom_providers:\n  - name: My Proxy\n    base_url: https://proxy.example/v1\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"main","model":"@custom:My Proxy:anthropic/claude-opus-4.6","provider":""}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["default"] != "anthropic/claude-opus-4.6" {
+		t.Errorf("default = %v, want bare model", mc["default"])
+	}
+	if mc["provider"] != "custom:My Proxy" {
+		t.Errorf("provider = %v, want custom:My Proxy", mc["provider"])
+	}
+	if mc["base_url"] != "https://proxy.example/v1" {
+		t.Errorf("base_url = %v, want custom entry", mc["base_url"])
+	}
+}
+
+func TestMainModelSlashOpenRouter(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: openrouter\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"main","model":"anthropic/claude-sonnet-4.6","provider":""}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["default"] != "anthropic/claude-sonnet-4.6" {
+		t.Errorf("default = %v, want full path kept (openrouter)", mc["default"])
+	}
+	if mc["provider"] != "openrouter" {
+		t.Errorf("provider = %v, want openrouter", mc["provider"])
+	}
+}
+
+func TestMainModelProviderChangeDropsBaseURL(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-5\n  provider: openai\n  base_url: https://api.openai.com/v1\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"main","model":"x-ai/grok-4.5","provider":"x-ai"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if _, has := mc["base_url"]; has {
+		t.Errorf("base_url = %v, want dropped on provider change", mc["base_url"])
+	}
+	if mc["provider"] != "x-ai" {
+		t.Errorf("provider = %v, want x-ai", mc["provider"])
 	}
 }
 
@@ -842,5 +916,113 @@ providers:
 	pr, _ := pc["openrouter"].(map[string]any)
 	if _, has := pr["api_key"]; has {
 		t.Errorf("providers.openrouter.api_key still present")
+	}
+}
+
+func TestProfileCreate(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/create", `{"name":"karina","default_model":"gpt-5","model_provider":"openai","base_url":"https://api.openai.com/v1"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	// dir created + config.yaml has model defaults
+	cfg, err := readConfigYAML(filepath.Join(home, "profiles", "karina"))
+	if err != nil {
+		t.Fatalf("read profile config: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["default"] != "gpt-5" || mc["provider"] != "openai" {
+		t.Errorf("model = %v, want gpt-5/openai", mc)
+	}
+	if mc["base_url"] != "https://api.openai.com/v1" {
+		t.Errorf("base_url = %v", mc["base_url"])
+	}
+}
+
+func TestProfileCreateInvalidName(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/create", `{"name":"Bad Name!"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestProfileCreateDuplicate(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/create", `{"name":"good"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	rr = auxRequest(t, home, http.MethodPost, "/api/profile/create", `{"name":"good"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 duplicate", rr.Code)
+	}
+}
+
+func TestProfileSwitchNotFound(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/switch", `{"name":"nope"}`)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+}
+
+func TestProfileSwitchOK(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	if err := os.MkdirAll(filepath.Join(home, "profiles", "karina"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/switch", `{"name":"karina"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestProfileUpdate(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	profDir := filepath.Join(home, "profiles", "karina")
+	if err := os.MkdirAll(profDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeHomeFile(t, home, "profiles/karina/config.yaml", "model:\n  default: old\n  provider: anthropic\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/update", `{"name":"karina","default_model":"gpt-5","model_provider":"openai","base_url":"https://api.openai.com/v1"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(profDir)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["default"] != "gpt-5" || mc["provider"] != "openai" || mc["base_url"] != "https://api.openai.com/v1" {
+		t.Errorf("model = %v", mc)
+	}
+}
+
+func TestProfileDelete(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	profDir := filepath.Join(home, "profiles", "temp")
+	if err := os.MkdirAll(profDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/delete", `{"name":"temp"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stat(profDir); !os.IsNotExist(err) {
+		t.Errorf("profile dir still exists")
+	}
+}
+
+func TestProfileDeleteDefaultRejected(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/profile/delete", `{"name":"default"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
