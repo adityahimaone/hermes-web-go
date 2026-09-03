@@ -107,6 +107,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       event streams. Evidence: `TestChatConcurrentSessionsNoCrossContamination` under `-race`.
 - [x] `GET /api/chat/stream/status` — reconnect-banner support. Evidence: `TestChatStartStreamsTokenAndDone`
       confirms inactive status after completed stream; commit `ec72c10`.
+- [x] Session/history completion: `done` carries full session snapshot and `chat_api_parity.md`
+      §§2–3 history loss + done wipe are fixed; `finishTurn` guarantees exactly-one done and
+      persists whatever tokens accumulated on every exit path. Evidence:
+      `TestChatPersistsPartialAnswerOnAgentError` and `TestChatNeverEmitsTwoCompletionSignals`
+      (plus `TestReadEvents_ParsesEventTypeFromJSONPayload` for the HTTP fallback path).
 - [ ] Remove proxy fallback for chat routes once green — this is the highest-risk cutover, budget
       extra soak time (run both old and new in shadow/compare mode if feasible before fully cutting).
       **`httpClient` is the only transport in play at this point — ship and soak this before touching 4b.**

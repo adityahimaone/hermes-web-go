@@ -305,6 +305,101 @@ func (b *blockingClient) RunTurn(ctx context.Context, req agentclient.TurnReques
 }
 func (b *blockingClient) Cancel(ctx context.Context, sessionID string) error { return nil }
 
+func TestChatPersistsPartialAnswerOnAgentError(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{ID: "partial1", Title: "", Workspace: "/tmp", Model: "codex", Messages: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	// 2 tokens, then EventError, no EventDone.
+	fake := &fakeClient{
+		started: make(chan TurnRequestCapture, 1),
+		events: []agentclient.TurnEvent{
+			{Type: agentclient.EventToken, Text: "partial"},
+			{Type: agentclient.EventToken, Text: " answer"},
+			{Type: agentclient.EventError, Error: "agent crashed"},
+		},
+	}
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", bytes.NewBufferString(`{"session_id":"partial1","message":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("start status = %d", resp.StatusCode)
+	}
+	var startResp struct {
+		StreamID string `json:"stream_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&startResp); err != nil {
+		t.Fatal(err)
+	}
+	// Drain the stream to completion.
+	sresp, _ := http.Get(ts.URL + "/api/chat/stream?stream_id=" + startResp.StreamID)
+	out, _ := io.ReadAll(sresp.Body)
+	sresp.Body.Close()
+	// Token events carry the two partial pieces separately — stream shows them
+	// as two events ("partial" + " answer"), and the persisted assistant row is
+	// the joined text with status "partial".
+	if !strings.Contains(string(out), `"text":"partial"`) || !strings.Contains(string(out), `"text":" answer"`) {
+		t.Fatalf("stream missing partial tokens: %q", string(out))
+	}
+	if !strings.Contains(string(out), "event: done") {
+		t.Fatalf("stream missing done after error: %q", string(out))
+	}
+	// Partial text must be persisted as an assistant message.
+	row, err := store.GetSession(db, "partial1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(row.Messages, `"role":"assistant"`) || !strings.Contains(row.Messages, "partial answer") {
+		t.Fatalf("partial answer not persisted: %s", row.Messages)
+	}
+	if !strings.Contains(row.Messages, `"status":"partial"`) {
+		t.Fatalf("partial message missing status marker: %s", row.Messages)
+	}
+}
+
+func TestChatNeverEmitsTwoCompletionSignals(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{ID: "dup1", Title: "", Workspace: "/tmp", Model: "codex", Messages: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	// run.completed (swallowed) + done (canonical) — frontend must see ONE done.
+	fake := &fakeClient{
+		started: make(chan TurnRequestCapture, 1),
+		events: []agentclient.TurnEvent{
+			{Type: agentclient.EventToken, Text: "hi"},
+			{Type: agentclient.EventType("run.completed")},
+			{Type: agentclient.EventDone},
+		},
+	}
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", bytes.NewBufferString(`{"session_id":"dup1","message":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var startResp struct {
+		StreamID string `json:"stream_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&startResp); err != nil {
+		t.Fatal(err)
+	}
+	sresp, _ := http.Get(ts.URL + "/api/chat/stream?stream_id=" + startResp.StreamID)
+	out, _ := io.ReadAll(sresp.Body)
+	sresp.Body.Close()
+	if got := strings.Count(string(out), "event: done"); got != 1 {
+		t.Fatalf("want exactly 1 done event, got %d: %q", got, string(out))
+	}
+}
+
 func TestChatConcurrentSessionsNoCrossContamination(t *testing.T) {
 	db := testDB(t)
 	for _, sid := range []string{"concA", "concB"} {

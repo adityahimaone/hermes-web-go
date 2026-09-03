@@ -92,54 +92,82 @@ func (c *HTTPClient) readEvents(ctx context.Context, runID string, out chan<- Tu
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	var eventType EventType
+	// A done event carries a full session snapshot and can exceed Scanner's
+	// 64KiB default on long conversations.
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var pendingEventType string
 	var data strings.Builder
 	flush := func() {
-		if eventType == "" || data.Len() == 0 {
-			eventType = ""
-			data.Reset()
+		if data.Len() == 0 {
+			pendingEventType = ""
 			return
 		}
-		ev := TurnEvent{Type: eventType}
 		var payload map[string]any
-		if json.Unmarshal([]byte(data.String()), &payload) == nil {
-			ev.Data = payload
-			switch eventType {
-			case EventToken:
-				ev.Text, _ = payload["text"].(string)
-			case EventTool:
-				ev.Name, _ = payload["name"].(string)
-				ev.Preview, _ = payload["preview"].(string)
-			case EventError:
-				ev.Error, _ = payload["message"].(string)
+		if json.Unmarshal([]byte(data.String()), &payload) != nil {
+			data.Reset()
+			pendingEventType = ""
+			return
+		}
+		// The gateway's SSE frames are `data: {"event":...,...}` — the event
+		// name is a field INSIDE the JSON payload, not a standalone SSE-level
+		// `event:` line. Fall back to it whenever no `event:` line preceded.
+		eventType := pendingEventType
+		if eventType == "" {
+			eventType, _ = payload["event"].(string)
+		}
+		if ev, ok := translateGatewayEvent(eventType, payload); ok {
+			select {
+			case out <- ev:
+			case <-ctx.Done():
 			}
-		} else {
-			ev.Error = data.String()
 		}
-		select {
-		case out <- ev:
-		case <-ctx.Done():
-		}
-		eventType = ""
 		data.Reset()
+		pendingEventType = ""
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
-		case strings.HasPrefix(line, "event: "):
-			eventType = EventType(strings.TrimSpace(strings.TrimPrefix(line, "event: ")))
-		case strings.HasPrefix(line, "data: "):
+		case line == "":
+			flush()
+		case strings.HasPrefix(line, "event:"):
+			pendingEventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
 			if data.Len() > 0 {
 				data.WriteByte('\n')
 			}
-			data.WriteString(strings.TrimPrefix(line, "data: "))
-		case line == "":
-			flush()
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
 	flush()
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		out <- TurnEvent{Type: EventError, Error: err.Error()}
+	}
+}
+
+func translateGatewayEvent(eventType string, payload map[string]any) (TurnEvent, bool) {
+	switch eventType {
+	case "message.delta":
+		text, _ := payload["delta"].(string)
+		return TurnEvent{Type: EventToken, Text: text, Data: payload}, true
+	case "token":
+		text, _ := payload["text"].(string)
+		return TurnEvent{Type: EventToken, Text: text, Data: payload}, true
+	case "run.completed":
+		// Informational only; `done` is the single completion signal.
+		return TurnEvent{}, false
+	case "done":
+		return TurnEvent{Type: EventDone, Data: payload}, true
+	case "tool":
+		name, _ := payload["name"].(string)
+		preview, _ := payload["preview"].(string)
+		return TurnEvent{Type: EventTool, Name: name, Preview: preview, Data: payload}, true
+	case "approval":
+		return TurnEvent{Type: EventApproval, Data: payload}, true
+	case "error":
+		msg, _ := payload["message"].(string)
+		return TurnEvent{Type: EventError, Error: msg, Data: payload}, true
+	default:
+		return TurnEvent{}, false
 	}
 }
 

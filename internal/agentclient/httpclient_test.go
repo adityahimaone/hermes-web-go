@@ -101,3 +101,43 @@ func TestHTTPClientStartError(t *testing.T) {
 		t.Fatal("expected start error")
 	}
 }
+
+// TestReadEvents_ParsesEventTypeFromJSONPayload guards the gateway's real SSE
+// wire format: frames are `data: {"event":...,...}` with the event name a
+// field INSIDE the JSON payload — there is no standalone `event:` line. The
+// old parser waited for an SSE-level `event:` line, so eventType was always
+// empty and every event got dropped. This test would have failed there.
+func TestReadEvents_ParsesEventTypeFromJSONPayload(t *testing.T) {
+	onEvents := func(w http.ResponseWriter) {
+		f := w.(http.Flusher)
+		// Gateway real format: event name inside JSON, no `event:` line.
+		_, _ = w.Write([]byte(`data: {"event":"message.delta","delta":"Hel"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"event":"message.delta","delta":"lo"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"event":"run.completed","output":"Hello"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"event":"done","session":{"session_id":"s1","messages":[]}}` + "\n\n"))
+		f.Flush()
+	}
+	base, _ := newRunnerShim(t, onEvents)
+	c := NewHTTPClient(base, "")
+	ch, err := c.RunTurn(context.Background(), TurnRequest{SessionID: "s1", TaskID: "t", Message: "hi"})
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	var got []TurnEvent
+	for ev := range ch {
+		got = append(got, ev)
+	}
+	// Exactly 3 events: two tokens + one done. run.completed is swallowed.
+	if len(got) != 3 {
+		t.Fatalf("want 3 events (2 tokens + done, run.completed swallowed), got %d: %+v", len(got), got)
+	}
+	if got[0].Type != EventToken || got[0].Text != "Hel" {
+		t.Errorf("event 0: want token 'Hel', got %+v", got[0])
+	}
+	if got[1].Type != EventToken || got[1].Text != "lo" {
+		t.Errorf("event 1: want token 'lo', got %+v", got[1])
+	}
+	if got[2].Type != EventDone {
+		t.Errorf("event 2: want done, got %+v", got[2])
+	}
+}

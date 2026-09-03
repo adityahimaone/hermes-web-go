@@ -154,31 +154,23 @@ CREATE TABLE sessions (
 
 ---
 
-## 5. Known Issues & Pending Work
+## 5. Known Issues — superseded by `docs_update/3-sept-2026-part-3/10-chat-parity-fixes.md`
 
-### 5.1 Duplicate Completion Event
-- **Issue**: Stream emit `run.completed` + `done: null` → two completion signals.
-- **Impact**: Cosmetic; frontend handles both but redundant.
-- **Priority**: Low
-- **File**: `internal/httpserver/chat.go` relay loop
+The table here now reflects *actual* priority per Phase 4b (auto-mode safety
+net must not be dead) — it supersedes the original doc's priorities. Detailed
+code/test snippets live in `10-chat-parity-fixes.md` §§1–3; only the status row
+stays here.
 
-### 5.2 Frontend Defensive Fix (Optional)
-- **Issue**: `messages.js:6188` blindly replace `S.messages` on done event.
-- **Risk**: If Go done payload malformed/corrupt → history wiped.
-- **Mitigation**: Add defensive check `if (d.session && Array.isArray(d.session.messages))` before replace.
-- **Status**: Not urgent; Go-side fix covers root cause.
+| # | Issue | Priority (actual) | Status | Where |
+|---|---|---|---|---|
+| 5.4 | HTTP parser drops all events (read only `event:` line, gateway is `data: {event:...}`) | **Highest** | ✅ Fixed in `httpclient.go` `readEvents` + `translateGatewayEvent` | §§1, 1T |
+| 5.1 | Duplicate completion `run.completed` → `done` | Medium | ✅ Fixed in `chat.go` relay (swallow + idempotent `finishTurn`) | §2, test |
+| 5.3 | Partial answer dropped on agent error | Medium | ✅ Fixed via same `finishTurn("partial")` | §2, test |
+| 5.2 | Frontend blind replace `S.messages` on absent payload | Low | ✅ Fixed `messages.js:6188` guard | §3, todo |
 
-### 5.3 Error-Path Persistence
-- **Issue**: Partial assistant answer dropped jika agent error mid-stream.
-- **Impact**: User kehilangan partial response saat timeout/error.
-- **Priority**: Medium (add when error recovery UX needed)
-- **Skipped Reason**: Ponytail ceiling — current flow assumes clean completion.
-
-### 5.4 HTTP Client Parser Bug
-- **File**: `internal/agentclient/httpclient.go`
-- **Issue**: `readEvents` parser expect `event:` prefix line; gateway SSE format use `data: {...}` only.
-- **Impact**: HTTP client path broken; live system pakai gRPC via shim (unaffected).
-- **Priority**: Low (fix if HTTP fallback needed)
+§§1, 1T detail: the §5.4 parser fix (buffer, JSON `event` fallback, swallow),
+and its regression test `TestReadEvents_ParsesEventTypeFromJSONPayload`. §2 is the
+relay-loop refactor; §3 is the frontend guard.
 
 ---
 

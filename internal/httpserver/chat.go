@@ -83,6 +83,52 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 			defer cancel()
 			defer reg.Close(streamID)
 			var answer strings.Builder
+			doneEmitted := false
+
+			// finishTurn is idempotent: it persists whatever assistant text
+			// accumulated and emits EXACTLY ONE done event. It runs on every
+			// exit path — success, transport-emitted done, agent error, or
+			// context cancellation — so a partial answer is never silently
+			// dropped and the frontend never sees a duplicate completion.
+			finishTurn := func(status string) {
+				if doneEmitted {
+					return
+				}
+				doneEmitted = true
+				if answer.Len() > 0 {
+					m := map[string]any{"role": "assistant", "content": answer.String()}
+					if status != "" {
+						m["status"] = status
+					}
+					_ = store.AppendMessage(db, sessionID, m)
+				}
+				// Build session payload for done event (matches Python gateway shape).
+				var doneData map[string]any
+				row, err := store.GetSession(db, sessionID)
+				if err == nil {
+					var messages []map[string]any
+					if row.Messages != "" {
+						_ = json.Unmarshal([]byte(row.Messages), &messages)
+					}
+					doneData = map[string]any{"session": map[string]any{
+						"session_id":    row.ID,
+						"title":         row.Title,
+						"workspace":     row.Workspace,
+						"model":         row.Model,
+						"created_at":    row.CreatedAt,
+						"updated_at":    row.UpdatedAt,
+						"pinned":        row.Pinned,
+						"archived":      row.Archived,
+						"project_id":    row.ProjectID,
+						"message_count": len(messages),
+						"messages":      messages,
+					}}
+				}
+				select {
+				case ch <- agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData}:
+				case <-ctx.Done():
+				}
+			}
 
 			evCh, err := client.RunTurn(ctx, agentclient.TurnRequest{
 				SessionID: sessionID,
@@ -96,11 +142,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 				case ch <- agentclient.TurnEvent{Type: agentclient.EventError, Error: err.Error()}:
 				case <-ctx.Done():
 				}
-				// publish a done marker so SSE client gets an end-of-stream
-				select {
-				case ch <- agentclient.TurnEvent{Type: agentclient.EventDone}:
-				default:
-				}
+				finishTurn("partial")
 				return
 			}
 			// Relay events from the agent into the stream registry channel.
@@ -108,52 +150,45 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 				select {
 				case ev, ok := <-evCh:
 					if !ok {
-						// Persist assistant answer.
-						if answer.Len() > 0 {
-							_ = store.AppendMessage(db, sessionID, map[string]any{"role": "assistant", "content": answer.String()})
-						}
-						// Build session payload for done event (matches Python gateway shape).
-						var doneData map[string]any
-						row, err := store.GetSession(db, sessionID)
-						if err == nil {
-							var messages []map[string]any
-							if row.Messages != "" {
-								_ = json.Unmarshal([]byte(row.Messages), &messages)
-							}
-							sessionMap := map[string]any{
-								"session_id":    row.ID,
-								"title":         row.Title,
-								"workspace":     row.Workspace,
-								"model":         row.Model,
-								"created_at":    row.CreatedAt,
-								"updated_at":    row.UpdatedAt,
-								"pinned":        row.Pinned,
-								"archived":      row.Archived,
-								"project_id":    row.ProjectID,
-								"message_count": len(messages),
-								"messages":      messages,
-							}
-							doneData = map[string]any{"session": sessionMap}
-						}
-						select {
-						case ch <- agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData}:
-						case <-ctx.Done():
-						}
+						finishTurn("")
 						return
 					}
+					// accumulate token text before forwarding
 					if ev.Type == agentclient.EventToken {
 						answer.WriteString(ev.Text)
+					}
+					// §5.1: run.completed is informational only — done is the
+					// single completion signal. Swallow it so the frontend
+					// never gets a duplicate terminal event.
+					if string(ev.Type) == "run.completed" {
+						continue
 					}
 					if ev.Type == agentclient.EventApproval && st != nil {
 						entry := approval.FromEvent(sessionID, ev.Data)
 						st.Submit(entry)
 					}
+					// Normalize transport terminal events at this boundary.
+					// chat.go owns persistence and emits one canonical done.
+					if ev.Type == agentclient.EventError {
+						select {
+						case ch <- ev:
+						case <-ctx.Done():
+						}
+						finishTurn("partial")
+						return
+					}
+					if ev.Type == agentclient.EventDone {
+						finishTurn("")
+						return
+					}
 					select {
 					case ch <- ev:
 					case <-ctx.Done():
+						finishTurn("partial")
 						return
 					}
 				case <-ctx.Done():
+					finishTurn("partial")
 					return
 				}
 			}
