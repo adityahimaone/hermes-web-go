@@ -58,6 +58,22 @@ func startMockAgentServer(t *testing.T) string {
 	return sock
 }
 
+func startMockAgentServerWithEvents(t *testing.T, evs []*agentpb.TurnEvent) string {
+	t.Helper()
+	sock := filepath.Join(os.TempDir(), "agmock-seq.sock")
+	_ = os.Remove(sock)
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	mock := &mockAgentServer{evs: evs}
+	srv := grpc.NewServer()
+	agentpb.RegisterAgentServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop(); lis.Close(); _ = os.Remove(sock) })
+	return sock
+}
+
 func fakeHTTPFallback(t *testing.T) *HTTPClient {
 	t.Helper()
 	ts, _ := newRunnerShim(t, func(w http.ResponseWriter) {
@@ -98,6 +114,53 @@ func TestNewBestClient_AutoPrefersGRPCWhenAvailable(t *testing.T) {
 	if _, ok := client.(*GRPCClient); !ok {
 		t.Fatalf("expected GRPCClient when socket is healthy, got %T", client)
 	}
+}
+
+func TestGRPCAndHTTPProduceSameTurnEventSequence(t *testing.T) {
+	grpcSocket := startMockAgentServerWithEvents(t, []*agentpb.TurnEvent{
+		{Type: "tool", Name: "shell", Preview: "pwd", DataJson: `{"event":"tool","name":"shell","preview":"pwd"}`},
+		{Type: "token", Text: "hello", DataJson: `{"event":"token","text":"hello"}`},
+		{Type: "done", DataJson: `{"event":"done"}`},
+	})
+	grpcClient, err := NewBestClient(context.Background(), TransportConfig{Mode: TransportGRPC, SocketPath: grpcSocket}, fakeHTTPFallback(t))
+	if err != nil {
+		t.Fatalf("grpc client: %v", err)
+	}
+	defer grpcClient.(*GRPCClient).Close()
+	grpcEvents, err := grpcClient.RunTurn(context.Background(), TurnRequest{SessionID: "s1", TaskID: "t1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("grpc turn: %v", err)
+	}
+	gotGRPC := collectTurnEvents(grpcEvents)
+
+	httpBase, _ := newRunnerShim(t, func(w http.ResponseWriter) {
+		f := w.(http.Flusher)
+		_, _ = w.Write([]byte(`data: {"event":"tool","name":"shell","preview":"pwd"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"event":"message.delta","delta":"hello"}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"event":"done"}` + "\n\n"))
+		f.Flush()
+	})
+	httpEvents, err := NewHTTPClient(httpBase, "").RunTurn(context.Background(), TurnRequest{SessionID: "s1", TaskID: "t1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("http turn: %v", err)
+	}
+	gotHTTP := collectTurnEvents(httpEvents)
+	if len(gotGRPC) != len(gotHTTP) {
+		t.Fatalf("event counts differ: grpc=%+v http=%+v", gotGRPC, gotHTTP)
+	}
+	for i := range gotGRPC {
+		if gotGRPC[i].Type != gotHTTP[i].Type || gotGRPC[i].Text != gotHTTP[i].Text || gotGRPC[i].Name != gotHTTP[i].Name || gotGRPC[i].Preview != gotHTTP[i].Preview || gotGRPC[i].Error != gotHTTP[i].Error {
+			t.Fatalf("event %d differs: grpc=%+v http=%+v", i, gotGRPC[i], gotHTTP[i])
+		}
+	}
+}
+
+func collectTurnEvents(ch <-chan TurnEvent) []TurnEvent {
+	var events []TurnEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+	return events
 }
 
 func TestGRPCFallbackOnCrash(t *testing.T) {

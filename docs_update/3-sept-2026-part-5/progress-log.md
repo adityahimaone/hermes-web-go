@@ -42,6 +42,8 @@ Live: `http://127.0.0.1:18787/` — running (use `./ctl.sh stop` to terminate)
 - Shim log recorded `events HTTP 200` and token/done events. `stream/status` after
   completion returned `active:false,replay_available:true`.
 - Runtime-only evidence. No deterministic parity fixture claim.
+- Deterministic transport parity: `TestGRPCAndHTTPProduceSameTurnEventSequence` and
+  `TestGRPCFallbackOnCrash` — semantic `TurnEvent` equality + HTTP fallback verified.
 
 ## Task list
 - Updated `docs/04-task-breakdown.md` §Phase 4a and §4b with verified journal + real

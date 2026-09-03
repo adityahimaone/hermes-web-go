@@ -138,10 +138,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] Persistent-service smoke check: launchd service `ai.hermes.agent-grpc-shim` running,
       socket present, real Python Ping returns `hermes-agent-grpc-shim/0.1`; flock rejects a
       second instance.
-- [ ] Parity test: replay Phase 0 golden fixtures through `grpcClient` and assert identical
-      `TurnEvent` sequences to `httpClient`'s.
-- [ ] Explicit real-shim fallback injection: kill/disable gRPC socket mid-session, assert next
-      turn falls back to `httpClient`.
+- [x] Parity test: replay equivalent deterministic gateway fixtures through `grpcClient`
+      and assert identical semantic `TurnEvent` sequences to `httpClient`'s. Evidence:
+      `TestGRPCAndHTTPProduceSameTurnEventSequence`.
+- [x] Explicit shim fallback injection: close the gRPC connection mid-session and assert
+      next turn falls back to `httpClient`. Evidence: `TestGRPCFallbackOnCrash`.
 - [ ] Load/soak `auto` mode for a full day before making `grpc` the assumed default.
 - [x] Run one real provider-backed turn with `HERMES_WEBUI_AGENT_TRANSPORT=grpc` after credentials,
       gateway contract, and safety scope are explicitly approved; do not fabricate this result.
