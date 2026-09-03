@@ -645,6 +645,48 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			"terminal_remote_backend": terminalRemoteBackend(),
 		})
 	})
+
+	// POST /api/sessions/cleanup (and _zero_message): remove empty sessions.
+	// Mirrors Python _handle_sessions_cleanup: rows that are Untitled + zero
+	// messages (or any zero-message row for the zero_message variant) are
+	// deleted, along with their backing session files under dataRoot/sessions
+	// when present (so a server restart + import cannot resurrect them).
+	r.Post("/api/sessions/cleanup", func(w http.ResponseWriter, req *http.Request) {
+		cleaned, err := cleanupSessions(db, dataRoot, false)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to clean sessions")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "cleaned": cleaned})
+	})
+	r.Post("/api/sessions/cleanup_zero_message", func(w http.ResponseWriter, req *http.Request) {
+		cleaned, err := cleanupSessions(db, dataRoot, true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to clean sessions")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "cleaned": cleaned})
+	})
+}
+
+// cleanupSessions removes empty sessions (DB rows AND their backing session
+// files under dataRoot/sessions when present) and returns the count removed.
+func cleanupSessions(db *sql.DB, dataRoot string, zeroOnly bool) (int, error) {
+	ids, err := store.CleanupSessions(db, zeroOnly)
+	if err != nil {
+		return 0, err
+	}
+	// Best-effort backing-file deletion for exactly the cleaned sessions. The
+	// DB is the Go projection, but the legacy session files are what a later
+	// import re-reads; deleting them too prevents a restarted server from
+	// resurrecting cleaned sessions (Python _handle_sessions_cleanup does the
+	// same unlink on the file it just judged empty).
+	for _, id := range ids {
+		if dataRoot != "" {
+			_ = os.Remove(filepath.Join(dataRoot, "sessions", id+".json"))
+		}
+	}
+	return len(ids), nil
 }
 
 // workspaceList returns the complete workspace list, matching the shape

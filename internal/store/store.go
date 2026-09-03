@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -304,6 +305,46 @@ func TruncateMessages(db *sql.DB, id string, keep int) error {
 func ClearSession(db *sql.DB, id string) error {
 	_, err := db.Exec(`UPDATE sessions SET messages='[]', title='Untitled', rev=rev+1, updated_at=? WHERE session_id=?`, time.Now().Unix(), id)
 	return err
+}
+
+// CleanupSessions deletes rows matching the cleanup predicate. When
+// zeroOnly is false the row must be Untitled AND have zero messages (Python
+// /api/sessions/cleanup); when true any zero-message row qualifies
+// (/api/sessions/cleanup_zero_message). Returns the session IDs removed.
+func CleanupSessions(db *sql.DB, zeroOnly bool) ([]string, error) {
+	cond := `messages = '[]'`
+	if !zeroOnly {
+		cond += ` AND title = 'Untitled'`
+	}
+	rows, err := db.Query(`SELECT session_id FROM sessions WHERE ` + cond)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	// Delete matching rows.
+	placeholders := strings.Repeat(",?", len(ids)-1)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	if _, err := db.Exec(`DELETE FROM sessions WHERE session_id IN (?`+placeholders+`)`, args...); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // CountPinnedSessions returns how many sessions are currently pinned.

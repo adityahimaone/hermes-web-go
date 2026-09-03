@@ -113,9 +113,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       project_id, toolsets, draft; pinned/archived reset; fresh timestamps — carried
       fields = what the Go projection has; tokens/personality/context-engine deferred
       until importer enrichment).
-      **Deferred:** `/api/sessions/cleanup` (filesystem sweep needs importer-aware
-      file reconciliation).
-      Evidence: `TestSessionFamilyHandlers` (20 subtests), `TestSessionFamilyNativeNoProxyFallback`.
+      `/api/sessions/cleanup` + `/api/sessions/cleanup_zero_message` (DB rows +
+      backing session files removed for Untitled+zero-message / any-zero-message;
+      `{ok, cleaned}` response).
+      Evidence: `TestSessionFamilyHandlers` (20 subtests), `TestSessionFamilyNativeNoProxyFallback`,
+      `TestSessionsCleanup`.
 
 ## Phase 4 — Chat + streaming
 

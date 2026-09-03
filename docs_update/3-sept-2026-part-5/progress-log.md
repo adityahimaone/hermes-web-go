@@ -121,6 +121,12 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 - Registered all 9 native in `internal/proxy/registry.go` (`NativeMethods`
   method-aware — draft is GET+POST) so proxy fallback never sees them.
 - `.gitignore` += `/hermes-web-go` (stray build binary).
+- `/api/sessions/cleanup` + `/api/sessions/cleanup_zero_message` native:
+  `store.CleanupSessions` deletes rows matching the predicate (Untitled+zero
+  messages / any zero message) and returns removed IDs; handler removes the
+  matching backing files under `dataRoot/sessions` so a restart + import cannot
+  resurrect them (Python `_handle_sessions_cleanup` parity). Registered native
+  in proxy registry. Family-1 session lifecycle now complete — no deferred items.
 
 ## Verification evidence (fresh, this run)
 - `go build ./...` — PASS
@@ -131,7 +137,9 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 - New regressions: `session_family_test.go` — `TestSessionFamilyHandlers`
   (20 subtests: status shape, pin quota, toolsets validation incl empty/blank,
   draft caps, truncate negative, clear, move unknown project, duplicate copy +
-  reset + missing, agent_running liveness), `TestSessionFamilyNativeNoProxyFallback`.
+  reset + missing, agent_running liveness), `TestSessionFamilyNativeNoProxyFallback`,
+  `TestSessionsCleanup` (predicates, backing-file removal, pinned-empty still
+  cleaned, zero_message variant).
 - `/api/session/duplicate` added (minimal): duplicates the fields the Go
   projection already has — title+" (copy)", workspace, model, full messages,
   project_id, enabled_toolsets, composer_draft; resets pinned/archived to false;
@@ -142,12 +150,12 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   preserved without importer enrichment.
 
 ## Deferred (documented in code + 04-task-breakdown)
-- `/api/sessions/cleanup`: filesystem sweep of Untitled/empty session files,
-  not a DB projection — needs importer-aware file reconciliation.
+- (none — Family-1 session lifecycle complete. `/api/sessions/cleanup` was the
+  last deferred item; now native.)
 
 ## Next step
-- Frontend verification against the new response shapes; `/api/sessions/cleanup`
-  after importer enrichment.
+- Family-2 config-driven routes (models/providers/profiles/settings) — blueprint
+  Phase E order #2; frontend verification against the new response shapes first.
 
 ---
 
