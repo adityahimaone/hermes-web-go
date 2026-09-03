@@ -74,6 +74,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			writeError(w, http.StatusInternalServerError, "failed to persist message")
 			return
 		}
+		history := turnHistory(row.Messages, msg)
 
 		// Create the stream before spawning the turn so the SSE endpoint can
 		// attach even if the agent returns instantly.
@@ -139,6 +140,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 				Message:   msg,
 				Workspace: workspace,
 				Model:     model,
+				History:   history,
 			})
 			if err != nil {
 				journal.Publish(agentclient.TurnEvent{Type: agentclient.EventError, Error: err.Error()})
@@ -242,7 +244,8 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			writeError(w, http.StatusBadRequest, "session_id and message are required")
 			return
 		}
-		if _, err := store.GetSession(db, body.SessionID); err != nil {
+		row, err := store.GetSession(db, body.SessionID)
+		if err != nil {
 			writeError(w, http.StatusNotFound, "Session not found")
 			return
 		}
@@ -255,6 +258,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			SessionID: body.SessionID,
 			TaskID:    body.SessionID,
 			Message:   body.Message,
+			History:   turnHistory(row.Messages, body.Message),
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "agent call failed: "+err.Error())
@@ -270,7 +274,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 				return
 			}
 		}
-		row, err := store.GetSession(db, body.SessionID)
+		row, err = store.GetSession(db, body.SessionID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load session")
 			return
@@ -282,6 +286,14 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		})
 	})
 
+}
+
+func turnHistory(raw, current string) []map[string]any {
+	var history []map[string]any
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &history)
+	}
+	return append(history, map[string]any{"role": "user", "content": current})
 }
 
 func parseAfterSeq(req *http.Request) uint64 {

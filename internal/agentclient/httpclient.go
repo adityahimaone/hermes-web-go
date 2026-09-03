@@ -53,6 +53,7 @@ func (c *HTTPClient) RunTurn(ctx context.Context, req TurnRequest) (<-chan TurnE
 		"workspace":   req.Workspace,
 		"provider":    req.Provider,
 		"model":       req.Model,
+		"history":     req.History,
 		"source":      "webui",
 	}
 	resp, err := c.request(ctx, http.MethodPost, "/v1/runs", payload, "application/json")

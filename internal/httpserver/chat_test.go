@@ -29,11 +29,12 @@ type TurnRequestCapture struct {
 	SessionID string
 	TaskID    string
 	Message   string
+	History   []map[string]any
 }
 
 func (f *fakeClient) RunTurn(ctx context.Context, req agentclient.TurnRequest) (<-chan agentclient.TurnEvent, error) {
 	f.mu.Lock()
-	f.started <- TurnRequestCapture{SessionID: req.SessionID, TaskID: req.TaskID, Message: req.Message}
+	f.started <- TurnRequestCapture{SessionID: req.SessionID, TaskID: req.TaskID, Message: req.Message, History: req.History}
 	ch := make(chan agentclient.TurnEvent, len(f.events))
 	for _, ev := range f.events {
 		ch <- ev
@@ -140,6 +141,34 @@ func TestChatStartStreamsTokenAndDone(t *testing.T) {
 	}
 	if !strings.Contains(row.Messages, `"role":"user"`) || !strings.Contains(row.Messages, "hi") {
 		t.Fatalf("user message not persisted: %s", row.Messages)
+	}
+}
+
+// TestChatStartForwardsSessionHistory verifies prior messages plus current user
+// input reach the agent boundary in order.
+func TestChatStartForwardsSessionHistory(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{
+		ID: "history1", Workspace: "/tmp", Model: "codex",
+		Messages: `[{"role":"user","content":"previous"},{"role":"assistant","content":"reply"}]`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeClient{started: make(chan TurnRequestCapture, 1), events: []agentclient.TurnEvent{{Type: agentclient.EventDone}}}
+	ts := httptest.NewServer(NewRouterWithAgent("", nil, db, "", fake, approval.NewStore()))
+	defer ts.Close()
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", strings.NewReader(`{"session_id":"history1","message":"next"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	select {
+	case got := <-fake.started:
+		if len(got.History) != 3 || got.History[0]["content"] != "previous" || got.History[2]["content"] != "next" {
+			t.Fatalf("history = %#v", got.History)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent never called")
 	}
 }
 

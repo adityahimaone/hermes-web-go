@@ -144,6 +144,9 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] Explicit shim fallback injection: close the gRPC connection mid-session and assert
       next turn falls back to `httpClient`. Evidence: `TestGRPCFallbackOnCrash`.
 - [ ] Load/soak `auto` mode for a full day before making `grpc` the assumed default.
+- [x] Forward normalized session history through both HTTP and gRPC agent transports. Chat start
+      appends current user message before dispatch; `TestChatStartForwardsSessionHistory` proves
+      ordered prior + current messages reach the agent boundary.
 - [x] Run one real provider-backed turn with `HERMES_WEBUI_AGENT_TRANSPORT=grpc` after credentials,
       gateway contract, and safety scope are explicitly approved; do not fabricate this result.
       Evidence: live `POST /api/chat/start` + `GET /api/chat/stream` on `127.0.0.1:18787`,
