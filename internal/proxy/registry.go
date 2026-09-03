@@ -61,6 +61,7 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/session/duplicate":             {http.MethodPost: true},
 	"/api/sessions/cleanup":              {http.MethodPost: true},
 	"/api/sessions/cleanup_zero_message": {http.MethodPost: true},
+	"/api/session/conversation-rounds":   {http.MethodPost: true},
 	"/api/workspaces/add":                {http.MethodPost: true},
 	"/api/workspaces/remove":             {http.MethodPost: true},
 	"/api/workspaces/rename":             {http.MethodPost: true},

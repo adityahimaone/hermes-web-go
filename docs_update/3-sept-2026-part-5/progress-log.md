@@ -139,7 +139,9 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   draft caps, truncate negative, clear, move unknown project, duplicate copy +
   reset + missing, agent_running liveness), `TestSessionFamilyNativeNoProxyFallback`,
   `TestSessionsCleanup` (predicates, backing-file removal, pinned-empty still
-  cleaned, zero_message variant).
+  cleaned, zero_message variant), `conversation_rounds_test.go` — 5 tests
+  (count state machine incl merged consecutive users, incomplete session,
+  since filter, missing session_id, no state.db).
 - `/api/session/duplicate` added (minimal): duplicates the fields the Go
   projection already has — title+" (copy)", workspace, model, full messages,
   project_id, enabled_toolsets, composer_draft; resets pinned/archived to false;
@@ -148,10 +150,23 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   compression anchors, gateway routing — Python duplicate carries these, but the
   frontend re-derives context on the next turn so the visible behavior is
   preserved without importer enrichment.
+- `/api/session/conversation-rounds` native: `internal/httpserver/conversation_rounds.go`
+  mirrors Python `count_conversation_rounds` — reads Hermes `state.db` (read-only,
+  `<hermesHome>/state.db`) with the exact round-counting state machine (consecutive
+  user messages merge, threshold 10). Mounted via `ConversationRoundsRouter` in both
+  router constructors; no state.db → `{ok:true, rounds:0}` (Python parity).
+  Registered native in proxy registry.
+- Family-1 remaining routes audit (20 proxied): agent-boundary routes
+  (branch/retry/undo/compress/title-regenerate/handoff-summary/stream/import/
+  lineage/recovery/worktree/yolo/anchor-scene) deferred to an agent-boundary family —
+  they need the agent runner, state.db gateway semantics, repo fs, or approval
+  config. `conversation-rounds` was the final pure-DB item.
 
 ## Deferred (documented in code + 04-task-breakdown)
-- (none — Family-1 session lifecycle complete. `/api/sessions/cleanup` was the
-  last deferred item; now native.)
+- Agent-boundary session routes (branch / retry / undo / compress / title-regenerate /
+  handoff-summary / stream / import / lineage / recovery / worktree / yolo /
+  anchor-scene): need agent runner, state.db gateway semantics, repo fs, or approval
+  config — separate "agent boundary" family, not DB projection.
 
 ## Next step
 - Family-2 config-driven routes (models/providers/profiles/settings) — blueprint
