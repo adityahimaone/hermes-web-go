@@ -322,10 +322,10 @@ func TestChatConcurrentSessionsNoCrossContamination(t *testing.T) {
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	// Fire both starts concurrently.
+	// Fire both starts concurrently, then drain each stream in the same
+	// goroutine immediately after start so the stream is attached before
+	// the turn goroutine closes it.
 	var wg sync.WaitGroup
-	streams := make(map[string]string, 2)
-	var mu sync.Mutex
 	for _, sid := range []string{"concA", "concB"} {
 		wg.Add(1)
 		go func(sid string) {
@@ -344,38 +344,18 @@ func TestChatConcurrentSessionsNoCrossContamination(t *testing.T) {
 				t.Errorf("decode %s: %v", sid, err)
 				return
 			}
-			mu.Lock()
-			streams[sid] = startResp.StreamID
-			mu.Unlock()
-		}(sid)
-	}
-	wg.Wait()
-	if len(streams) != 2 {
-		t.Fatalf("expected 2 streams, got %d", len(streams))
-	}
-
-	// Drain each stream and assert its token text matches only its session.
-	for _, sid := range []string{"concA", "concB"} {
-		sid := sid
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var streamID string
-			mu.Lock()
-			streamID = streams[sid]
-			mu.Unlock()
-			resp, err := http.Get(ts.URL + "/api/chat/stream?stream_id=" + streamID)
+			sresp, err := http.Get(ts.URL + "/api/chat/stream?stream_id=" + startResp.StreamID)
 			if err != nil {
 				t.Errorf("stream %s: %v", sid, err)
 				return
 			}
-			defer resp.Body.Close()
-			out, _ := io.ReadAll(resp.Body)
+			defer sresp.Body.Close()
+			out, _ := io.ReadAll(sresp.Body)
 			want := map[string]string{"concA": "alpha", "concB": "bravo"}[sid]
 			if !strings.Contains(string(out), `"text":"`+want+`"`) {
 				t.Errorf("session %s stream=%q missing text %q", sid, string(out), want)
 			}
-		}()
+		}(sid)
 	}
 	wg.Wait()
 }
@@ -391,7 +371,7 @@ func (m *mapClient) RunTurn(ctx context.Context, req agentclient.TurnRequest) (<
 	case m.started <- TurnRequestCapture{SessionID: req.SessionID, TaskID: req.TaskID, Message: req.Message}:
 	default:
 	}
-	ch := make(chan agentclient.TurnEvent, len(m.perSess[req.SessionID]))
+	ch := make(chan agentclient.TurnEvent, len(m.perSess[req.SessionID])+1)
 	for _, ev := range m.perSess[req.SessionID] {
 		ch <- ev
 	}

@@ -108,12 +108,35 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 				select {
 				case ev, ok := <-evCh:
 					if !ok {
-						// Persist assistant answer before signaling done.
+						// Persist assistant answer.
 						if answer.Len() > 0 {
 							_ = store.AppendMessage(db, sessionID, map[string]any{"role": "assistant", "content": answer.String()})
 						}
+						// Build session payload for done event (matches Python gateway shape).
+						var doneData map[string]any
+						row, err := store.GetSession(db, sessionID)
+						if err == nil {
+							var messages []map[string]any
+							if row.Messages != "" {
+								_ = json.Unmarshal([]byte(row.Messages), &messages)
+							}
+							sessionMap := map[string]any{
+								"session_id":    row.ID,
+								"title":         row.Title,
+								"workspace":     row.Workspace,
+								"model":         row.Model,
+								"created_at":    row.CreatedAt,
+								"updated_at":    row.UpdatedAt,
+								"pinned":        row.Pinned,
+								"archived":      row.Archived,
+								"project_id":    row.ProjectID,
+								"message_count": len(messages),
+								"messages":      messages,
+							}
+							doneData = map[string]any{"session": sessionMap}
+						}
 						select {
-						case ch <- agentclient.TurnEvent{Type: agentclient.EventDone}:
+						case ch <- agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData}:
 						case <-ctx.Done():
 						}
 						return

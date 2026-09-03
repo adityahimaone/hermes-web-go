@@ -1,0 +1,285 @@
+# Chat API Parity: Go WebUI vs Python Legacy
+
+## Overview
+Dokumen ini membandingkan implementasi chat API antara Go WebUI (baru) dan Python Legacy WebUI untuk memastikan fitur chat berfungsi identik. Digunakan sebagai referensi saat migrasi atau debugging.
+
+---
+
+## 1. Endpoint Comparison
+
+### 1.1 Start Chat
+| Aspect | Python Legacy | Go WebUI | Status |
+|--------|--------------|----------|--------|
+| Endpoint | `POST /api/chat/start` | `POST /api/chat/start` | ✅ Parity |
+| Request Body | `{session_id, message}` | `{session_id, message}` | ✅ Parity |
+| Response | `{stream_id, session_id}` | `{stream_id, session_id}` | ✅ Parity |
+| Auth | Bearer token | Bearer token | ✅ Parity |
+
+### 1.2 Stream SSE
+| Aspect | Python Legacy | Go WebUI | Status |
+|--------|--------------|----------|--------|
+| Endpoint | `GET /api/chat/stream?stream_id=X` | `GET /api/chat/stream?stream_id=X` | ✅ Parity |
+| Format | SSE `data: {...}` | SSE `data: {...}` | ✅ Parity |
+| Event Types | `message.delta`, `run.completed`, `done` | `message.delta`, `run.completed`, `done` | ✅ Parity |
+
+### 1.3 Session History
+| Aspect | Python Legacy | Go WebUI | Status |
+|--------|--------------|----------|--------|
+| Load Session | `GET /api/session/{id}` | `GET /api/session/{id}` | ✅ Parity |
+| Messages Field | Full history array | Full history array | ✅ Parity (fixed) |
+| Persist User Msg | ✅ Yes | ✅ Yes | ✅ Parity |
+| Persist Assistant Msg | ✅ Yes | ✅ Yes | ✅ Parity (fixed commit 6cabfdb) |
+
+---
+
+## 2. Critical Bug Fixes & Logs
+
+### 2.1 History Loss Bug (FIXED)
+**Symptom**: Setelah Hermes reply, user balas lagi → reply Hermes sebelumnya hilang dari UI.
+
+**Root Cause**: 
+- File: `internal/httpserver/chat.go:108-120`
+- Issue: Token accumulator (`strings.Builder`) tidak pernah persist assistant message ke DB setelah stream selesai.
+- Impact: Turn kedua load session dari DB → hanya user messages → assistant reply hilang.
+
+**Fix Applied**:
+```go
+// chat.go:111-114 (after channel close)
+if answer.Len() > 0 {
+    _ = store.AppendMessage(db, sessionID, map[string]any{
+        "role": "assistant", 
+        "content": answer.String()
+    })
+}
+```
+
+**Verification Log**:
+```
+Session: 5dfa58eefd1a
+Turn 1: "first" → stream d7951a40cf10 → assistant persisted
+Turn 2: "second" → stream 1274b553cb19 → assistant persisted
+Total messages: 17
+Last message: {"role":"assistant","content":"Second received. Persistence masih jalan."}
+Status: ✅ VERIFIED LIVE
+Commit: 6cabfdb
+```
+
+### 2.2 Done Event Session Payload (FIXED)
+**Symptom**: Frontend replace `S.messages` dengan empty array saat receive `event: done`.
+
+**Root Cause**:
+- File: `internal/httpserver/chat.go:EventDone emission`
+- Issue: Go kirim `EventDone` tanpa session payload; Python kirim full session snapshot.
+- Frontend behavior: `messages.js:6188` replace `S.messages = d.session.messages || []` → wipe live-streamed content.
+
+**Fix Applied**:
+```go
+// chat.go:117-138 (before EventDone)
+row, err := store.GetSession(db, sessionID)
+if err == nil {
+    var messages []map[string]any
+    if row.Messages != "" {
+        _ = json.Unmarshal([]byte(row.Messages), &messages)
+    }
+    sessionMap := map[string]any{
+        "session_id":    row.ID,
+        "title":         row.Title,
+        "workspace":     row.Workspace,
+        "model":         row.Model,
+        "created_at":    row.CreatedAt,
+        "updated_at":    row.UpdatedAt,
+        "pinned":        row.Pinned,
+        "archived":      row.Archived,
+        "project_id":    row.ProjectID,
+        "message_count": len(messages),
+        "messages":      messages,
+    }
+    doneData = map[string]any{"session": sessionMap}
+}
+// Emit with payload
+ch <- agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData}
+```
+
+**Test Log**:
+```
+TestChatConcurrentSessionsNoCrossContamination: PASS (0.02s)
+TestChatStartStreamsTokenAndDone: PASS
+TestChatDoneIncludesFullSessionHistory: PASS
+All httpserver tests: PASS (1.759s)
+```
+
+---
+
+## 3. SSE Event Format Reference
+
+### 3.1 Token Delta
+```
+data: {"event":"message.delta","delta":"Hello","session_id":"abc123","stream_id":"def456"}
+```
+
+### 3.2 Run Completed
+```
+data: {"event":"run.completed","output":"Full response text","session_id":"abc123","run_id":"run_xyz"}
+```
+
+### 3.3 Done (with session payload)
+```
+data: {"event":"done","session":{"session_id":"abc123","title":"Chat","messages":[...],"message_count":5}}
+```
+
+---
+
+## 4. Database Schema (SQLite)
+
+### sessions table
+```sql
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    workspace TEXT,
+    model TEXT,
+    messages TEXT,  -- JSON array of {role, content}
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    pinned INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    project_id TEXT
+);
+```
+
+### Message Persistence Flow
+1. User message: `store.AppendMessage(db, sid, {role:"user", content:"..."})` → immediate on `/api/chat/start`
+2. Assistant message: `store.AppendMessage(db, sid, {role:"assistant", content:"..."})` → on stream channel close (after all tokens accumulated)
+3. Done event: Fetch fresh session from DB → include in `EventDone.Data.session`
+
+---
+
+## 5. Known Issues & Pending Work
+
+### 5.1 Duplicate Completion Event
+- **Issue**: Stream emit `run.completed` + `done: null` → two completion signals.
+- **Impact**: Cosmetic; frontend handles both but redundant.
+- **Priority**: Low
+- **File**: `internal/httpserver/chat.go` relay loop
+
+### 5.2 Frontend Defensive Fix (Optional)
+- **Issue**: `messages.js:6188` blindly replace `S.messages` on done event.
+- **Risk**: If Go done payload malformed/corrupt → history wiped.
+- **Mitigation**: Add defensive check `if (d.session && Array.isArray(d.session.messages))` before replace.
+- **Status**: Not urgent; Go-side fix covers root cause.
+
+### 5.3 Error-Path Persistence
+- **Issue**: Partial assistant answer dropped jika agent error mid-stream.
+- **Impact**: User kehilangan partial response saat timeout/error.
+- **Priority**: Medium (add when error recovery UX needed)
+- **Skipped Reason**: Ponytail ceiling — current flow assumes clean completion.
+
+### 5.4 HTTP Client Parser Bug
+- **File**: `internal/agentclient/httpclient.go`
+- **Issue**: `readEvents` parser expect `event:` prefix line; gateway SSE format use `data: {...}` only.
+- **Impact**: HTTP client path broken; live system pakai gRPC via shim (unaffected).
+- **Priority**: Low (fix if HTTP fallback needed)
+
+---
+
+## 6. Testing Commands
+
+### Unit Tests
+```bash
+cd /Users/adityahimawan/Development/hermes-web-go
+go test ./internal/httpserver -run TestChat -v
+go test ./internal/store ./internal/stream
+```
+
+### Live Verification
+```bash
+# Health check
+curl -s http://127.0.0.1:8787/health | jq .
+
+# Start chat
+curl -X POST http://127.0.0.1:8787/api/chat/start \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"test123","message":"hello"}' | jq .
+
+# Stream SSE
+curl -N "http://127.0.0.1:8787/api/chat/stream?stream_id=<STREAM_ID>"
+
+# Check session history
+curl -s "http://127.0.0.1:8787/api/session/<SESSION_ID>" | jq '.messages | length'
+```
+
+### Build & Restart
+```bash
+cd /Users/adityahimawan/Development/hermes-web-go
+go build -o hermes-web-go ./cmd/server
+pkill -f './hermes-web-go' || true
+HERMES_WEBUI_LEGACY_PROXY_URL="http://127.0.0.1:52378" \
+HERMES_WEBUI_RUNNER_BASE_URL="http://127.0.0.1:8642" \
+./hermes-web-go &
+```
+
+---
+
+## 7. Architecture Diagram
+
+```
+Browser → Go WebUI (8787) → gRPC Shim → Gateway (8642) → Agent
+              ↓
+         SQLite DB (sessions table)
+              ↓
+         SSE Stream ←──┐
+                        │
+         Token Accumulator (strings.Builder)
+                        │
+         Persist on Channel Close
+                        │
+         Done Event + Session Payload
+```
+
+---
+
+## 8. Commit History (Chat Fixes)
+
+| Commit | Description | Files Changed |
+|--------|-------------|---------------|
+| `6cabfdb` | Persist assistant reply to session history on turn completion | `chat.go` (+9 lines) |
+| `[PENDING]` | Include session payload in done event to preserve history | `chat.go`, `chat_test.go` |
+
+---
+
+## 9. Environment Variables
+
+```bash
+HERMES_WEBUI_LEGACY_PROXY_URL=http://127.0.0.1:52378  # Python fallback
+HERMES_WEBUI_RUNNER_BASE_URL=http://127.0.0.1:8642    # Gateway
+HERMES_WEBUI_AGENT_API_KEY=<REDACTED>                 # Auth key
+```
+
+---
+
+## 10. Contact & Handoff Notes
+
+**For Next Agent**:
+1. Read this doc first → understand parity status.
+2. Check pending issues §5 → prioritize based on user request.
+3. Use testing commands §6 → verify before/after changes.
+4. Reference commit history §8 → avoid re-fixing solved bugs.
+5. Key files:
+   - `internal/httpserver/chat.go` — main chat logic
+   - `internal/httpserver/chat_test.go` — unit tests
+   - `static/messages.js` — frontend SSE handler
+   - `internal/store/store.go` — DB operations
+
+**Debug Tips**:
+- History loss? Check `AppendMessage` calls in `chat.go`.
+- SSE format wrong? Compare Python `_translate_event` vs Go `writer.go`.
+- Test timeout? Remove shared gates; use buffered channels (see §2.2 test fix).
+- Frontend wipe? Verify `EventDone.Data.session` populated.
+
+---
+
+*Generated: 2026-09-03*
+*Last Updated: After commit 6cabfdb + done payload fix*
+*Status: Production-ready with known minor issues (§5)*
+
+</content>
