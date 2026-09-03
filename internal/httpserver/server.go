@@ -178,6 +178,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	CronsRouter(r, routerHermesHome(o), o.cron)
 	SkillsMemRouter(r, routerHermesHome(o))
 	ConversationRoundsRouter(r, routerHermesHome(o))
+	ConfigRouter(r, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
@@ -212,6 +213,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	CronsRouter(r, routerHermesHome(o), o.cron)
 	SkillsMemRouter(r, routerHermesHome(o))
 	ConversationRoundsRouter(r, routerHermesHome(o))
+	ConfigRouter(r, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
