@@ -22,6 +22,15 @@ func SkillsMemRouter(r chi.Router, home string) {
 		writeJSON(w, map[string]any{"skills": skills})
 	})
 
+	r.Get("/api/skills/usage", func(w http.ResponseWriter, r *http.Request) {
+		usage, err := skillsmem.ReadUsage(home)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read skill usage")
+			return
+		}
+		writeJSON(w, usage)
+	})
+
 	r.Get("/api/skills/content", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 		content, err := skillsmem.SkillContent(home, name)

@@ -59,6 +59,32 @@ func TestSkillsListRoute(t *testing.T) {
 	}
 }
 
+func TestSkillsUsageRoute(t *testing.T) {
+	home := t.TempDir()
+	writeSkillsMemFixture(t, home)
+	if err := os.WriteFile(filepath.Join(home, "skills", ".usage.json"), []byte(`{"demo":{"use_count":2,"view_count":1,"patch_count":0}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouterWithAgent("", nil, nil, "", fakeClientNoop{}, approval.NewStore(), WithHermesHome(home))
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/skills/usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["total_invocations"] != float64(3) || body["unique_skills_used"] != float64(1) {
+		t.Fatalf("usage = %#v", body)
+	}
+}
+
 func TestSkillsContentRoute(t *testing.T) {
 	home := t.TempDir()
 	writeSkillsMemFixture(t, home)

@@ -6,6 +6,7 @@
 package skillsmem
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -164,6 +165,45 @@ func SkillContent(home, name string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"content": string(content), "name": name}, nil
+}
+
+// ReadUsage reads skill telemetry from <home>/skills/.usage.json.
+func ReadUsage(home string) (map[string]any, error) {
+	usage := make(map[string]map[string]any)
+	raw, err := os.ReadFile(filepath.Join(home, "skills", ".usage.json"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	} else {
+		var decoded map[string]any
+		if json.Unmarshal(raw, &decoded) == nil {
+			for name, record := range decoded {
+				if m, ok := record.(map[string]any); ok && m != nil {
+					usage[name] = m
+				}
+			}
+		}
+	}
+	total, unique := 0, 0
+	for _, record := range usage {
+		count := 0
+		for _, key := range []string{"use_count", "view_count", "patch_count"} {
+			if n, ok := record[key].(float64); ok && n > 0 {
+				count += int(n)
+			}
+		}
+		total += count
+		if count > 0 {
+			unique++
+		}
+	}
+	names := make([]string, 0, len(usage))
+	for name := range usage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return map[string]any{"usage": usage, "skill_names": names, "total_invocations": total, "unique_skills_used": unique}, nil
 }
 
 // ReadMemory reads MEMORY.md/USER.md (under memories/) and SOUL.md (home root)

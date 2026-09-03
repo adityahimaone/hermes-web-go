@@ -82,3 +82,25 @@ func TestReadMemoryReturnsAllFiles(t *testing.T) {
 		t.Fatalf("memory = %#v", got)
 	}
 }
+
+func TestReadUsage(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"demo":{"use_count":2,"view_count":1,"patch_count":0,"last_used":"today"},"broken":"ignored"}`
+	if err := os.WriteFile(filepath.Join(home, "skills", ".usage.json"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadUsage(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := got["usage"].(map[string]map[string]any)
+	if usage["demo"]["last_used"] != "today" {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if got["total_invocations"] != 3 || got["unique_skills_used"] != 1 {
+		t.Fatalf("totals = %#v", got)
+	}
+}
