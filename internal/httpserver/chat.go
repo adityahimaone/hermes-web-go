@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -81,6 +82,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 		go func() {
 			defer cancel()
 			defer reg.Close(streamID)
+			var answer strings.Builder
 
 			evCh, err := client.RunTurn(ctx, agentclient.TurnRequest{
 				SessionID: sessionID,
@@ -106,11 +108,18 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 				select {
 				case ev, ok := <-evCh:
 					if !ok {
+						// Persist assistant answer before signaling done.
+						if answer.Len() > 0 {
+							_ = store.AppendMessage(db, sessionID, map[string]any{"role": "assistant", "content": answer.String()})
+						}
 						select {
 						case ch <- agentclient.TurnEvent{Type: agentclient.EventDone}:
 						case <-ctx.Done():
 						}
 						return
+					}
+					if ev.Type == agentclient.EventToken {
+						answer.WriteString(ev.Text)
 					}
 					if ev.Type == agentclient.EventApproval && st != nil {
 						entry := approval.FromEvent(sessionID, ev.Data)
