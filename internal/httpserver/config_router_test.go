@@ -555,3 +555,171 @@ func TestSettingsSaveComposerOrderClean(t *testing.T) {
 		t.Errorf("composer_control_order len = %d, want 2 (dedup + bogus dropped)", len(list))
 	}
 }
+
+func auxRequest(t *testing.T, home, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := chi.NewRouter()
+	ConfigRouter(r, home, t.TempDir())
+	var req *http.Request
+	if body != "" {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestAuxiliaryGetDefaults(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/model/auxiliary", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	tasks, ok := resp["tasks"].([]any)
+	if !ok || len(tasks) != 11 {
+		t.Fatalf("tasks = %v, want 11 catalog rows", resp["tasks"])
+	}
+	main, _ := resp["main"].(map[string]any)
+	if main == nil || main["model"] != "codex" || main["provider"] != "custom" {
+		t.Errorf("main = %v, want codex/custom", main)
+	}
+	// default first task vision/provider auto
+	first, _ := tasks[0].(map[string]any)
+	if first["task"] != "vision" || first["provider"] != "auto" {
+		t.Errorf("first task = %v, want vision/auto", first)
+	}
+}
+
+func TestAuxiliarySetPersists(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"vision","provider":"openrouter","model":"x-ai/grok-4.5"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["ok"] != true || resp["task"] != "vision" || resp["provider"] != "openrouter" || resp["model"] != "x-ai/grok-4.5" {
+		t.Errorf("resp = %v", resp)
+	}
+	// file updated
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	aux, _ := cfg["auxiliary"].(map[string]any)
+	vision, _ := aux["vision"].(map[string]any)
+	if vision["provider"] != "openrouter" || vision["model"] != "x-ai/grok-4.5" {
+		t.Errorf("vision = %v, want openrouter/x-ai/grok-4.5", vision)
+	}
+	// GET reflects it
+	rr = auxRequest(t, home, http.MethodGet, "/api/model/auxiliary", "")
+	var got map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	gtasks, _ := got["tasks"].([]any)
+	gfirst, _ := gtasks[0].(map[string]any)
+	if gfirst["provider"] != "openrouter" {
+		t.Errorf("GET vision provider = %v, want openrouter", gfirst["provider"])
+	}
+}
+
+func TestAuxiliarySetReset(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\nauxiliary:\n  vision:\n    provider: openrouter\n    model: x-ai/grok-4.5\n  session_search:\n    provider: foo\n    model: bar\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"__reset__","provider":"auto","model":""}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	aux, _ := cfg["auxiliary"].(map[string]any)
+	vision, _ := aux["vision"].(map[string]any)
+	if vision["provider"] != "auto" || strval(vision["model"]) != "" {
+		t.Errorf("vision after reset = %v, want auto/empty", vision)
+	}
+	if _, has := aux["session_search"]; has {
+		t.Errorf("session_search should be removed (retired slot)")
+	}
+}
+
+func TestAuxiliarySetUnknownSlot(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"bogus","provider":"auto","model":""}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestAuxiliarySetMainScopeDeferred(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"main","model":"gpt-5","provider":"openai"}`)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rr.Code)
+	}
+}
+
+func TestAuxiliarySetCustomBaseURL(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\ncustom_providers:\n  - slug: myproxy\n    base_url: https://proxy.example/v1\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"compression","provider":"custom:myproxy","model":"anthropic/claude-sonnet-4"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	aux, _ := cfg["auxiliary"].(map[string]any)
+	comp, _ := aux["compression"].(map[string]any)
+	if comp["base_url"] != "https://proxy.example/v1" {
+		t.Errorf("compression base_url = %v, want https://proxy.example/v1", comp["base_url"])
+	}
+}
+
+func TestAuxiliarySetAdvanced(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"mcp","provider":"openrouter","model":"x-ai/grok-4.5","advanced":{"timeout":60,"extra_body":{"max_tokens":2000},"service_tier":"priority"}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	aux, _ := cfg["auxiliary"].(map[string]any)
+	mcp, _ := aux["mcp"].(map[string]any)
+	if strval(mcp["timeout"]) != "60" {
+		t.Errorf("timeout = %v, want 60", mcp["timeout"])
+	}
+	eb, _ := mcp["extra_body"].(map[string]any)
+	if mt, ok := eb["max_tokens"].(int); !ok || mt != 2000 {
+		t.Errorf("extra_body = %v, want max_tokens 2000", mcp["extra_body"])
+	}
+	if mcp["service_tier"] != "priority" {
+		t.Errorf("service_tier = %v, want priority", mcp["service_tier"])
+	}
+}
+
+func TestAuxiliarySetInvalidAdvanced(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodPost, "/api/model/set", `{"scope":"auxiliary","task":"mcp","provider":"auto","model":"","advanced":{"extra_body":"not json"}}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (invalid extra_body)", rr.Code)
+	}
+}

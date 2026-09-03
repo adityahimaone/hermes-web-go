@@ -182,6 +182,44 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   (speech keys survive unrelated save), `TestSettingsSaveAuthFieldsRejected`
   (501), `TestSettingsSaveComposerOrderClean` (dedup + bogus dropped).
 
+## Family-2 auxiliary models native — slice 4 (2026-09-03, seventh pass)
+
+## What was done
+- `GET /api/model/auxiliary` native in `config_router.go` — mirrors Python
+  `get_auxiliary_models()` (api/config.py:4917): 11-row canonical task
+  catalog (vision, web_extract, compression, approval, mcp,
+  title_generation, skills_hub, curator, kanban_decomposer,
+  profile_describer, triage_specifier) + `main` block
+  (`provider/model/supports_fast_tier/service_tier/base_url/timeout/.../
+  api_key_set`) from config.yaml `model`/`auxiliary`.
+- `POST /api/model/set` native — auxiliary scope only. Mirrors
+  `set_auxiliary_model()` (api/config.py:4966): validates task slot
+  (`__reset__` clears all slots + drops retired `session_search`), persists
+  provider/model into config.yaml, resolves `custom:<slug>` base_url from the
+  selected custom_providers entry, applies advanced options
+  (`base_url`, timeout/download_timeout/max_concurrency with positive-int
+  coercion, `extra_body` JSON parse, `service_tier` default/priority,
+  `api_key` write-only / `api_key_clear`). Response `{ok, task, provider,
+  model}`. Comment-preserving config.yaml round-trip via yaml.Node
+  (same pattern as skillsmem mutations).
+- `scope=main` → 501 Not Implemented (needs `set_hermes_default_model`
+  fast-mode overrides + service-tier resolution — deferred with models family).
+- Registered `/api/model/auxiliary` GET + `/api/model/set` POST native in
+  `internal/proxy/registry.go` (NativeMethods + NativeRoutes).
+
+## Verification evidence (fresh, this run)
+- `go build ./...`, `go vet ./...`, `git diff --check` — all PASS.
+- `go test ./...` — PASS (all packages).
+- `go test -race ./internal/httpserver/` — PASS.
+- New regressions `config_router_test.go`: `TestAuxiliaryGetDefaults` (11
+  rows, main model/provider read, vision auto), `TestAuxiliarySetPersists`
+  (file write + GET reflects), `TestAuxiliarySetReset` (auto/empty + retired
+  slot removed), `TestAuxiliarySetUnknownSlot` (400),
+  `TestAuxiliarySetMainScopeDeferred` (501), `TestAuxiliarySetCustomBaseURL`
+  (custom:<slug> base_url resolved), `TestAuxiliarySetAdvanced` (timeout /
+  extra_body / service_tier round-trip), `TestAuxiliarySetInvalidAdvanced`
+  (400 on bad extra_body).
+
 ---
 
 ## Family-1 session lifecycle native (2026-09-03, fourth pass)

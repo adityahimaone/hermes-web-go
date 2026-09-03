@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -103,6 +104,58 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 			return
 		}
 		writeJSON(w, saved)
+	})
+
+	r.Get("/api/model/auxiliary", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		cfg, err := readConfigYAML(home)
+		if err != nil {
+			// Missing config.yaml is not fatal — empty auxiliary + main defaults.
+			cfg = map[string]any{}
+		}
+		writeJSON(w, auxiliaryModels(cfg))
+	})
+
+	r.Post("/api/model/set", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		scope := strval(body["scope"])
+		if scope == "" {
+			writeError(w, http.StatusBadRequest, "scope is required")
+			return
+		}
+		if scope != "auxiliary" {
+			// Main-model set needs set_hermes_default_model (fast-mode overrides,
+			// service-tier resolution) — deferred with the models family.
+			writeError(w, http.StatusNotImplemented, "scope=main requires the models module port; use auxiliary")
+			return
+		}
+		task := strval(body["task"])
+		provider := strval(body["provider"])
+		if provider == "" || provider == "auto" {
+			provider = "auto"
+		}
+		model := strval(body["model"])
+		var advanced map[string]any
+		if adv, ok := body["advanced"].(map[string]any); ok {
+			advanced = adv
+		}
+		resp, err := setAuxModel(home, task, provider, model, advanced)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, resp)
 	})
 }
 
@@ -931,6 +984,445 @@ func readConfigYAML(home string) (map[string]any, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// strval returns the string value of v (or "" when not a string/number).
+func strval(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+// auxTaskCatalog mirrors api/config.py AUXILIARY_TASK_CATALOG.
+var auxTaskCatalog = []struct {
+	key, label, description string
+}{
+	{"vision", "Vision", "image/screenshot analysis"},
+	{"web_extract", "Web extract", "web page summarization"},
+	{"compression", "Compression", "context summarization"},
+	{"approval", "Approval", "smart command approval"},
+	{"mcp", "MCP", "MCP tool reasoning"},
+	{"title_generation", "Title generation", "session titles"},
+	{"skills_hub", "Skills hub", "skills search/install"},
+	{"curator", "Curator", "skill-usage review pass"},
+	{"kanban_decomposer", "Kanban decomposer", "task decomposition"},
+	{"profile_describer", "Profile describer", "profile summaries"},
+	{"triage_specifier", "Triage specifier", "issue/task triage specs"},
+}
+
+var retiredAuxTaskSlots = []string{"session_search"}
+
+// auxTaskSlots returns known auxiliary task keys.
+func auxTaskSlots() []string {
+	slots := make([]string, 0, len(auxTaskCatalog))
+	for _, s := range auxTaskCatalog {
+		slots = append(slots, s.key)
+	}
+	return slots
+}
+
+// auxTaskPayload mirrors api/config.py _aux_task_payload.
+func auxTaskPayload(taskKey string, entry map[string]any, label, desc string) map[string]any {
+	if entry == nil {
+		entry = map[string]any{}
+	}
+	provider := strval(entry["provider"])
+	if provider == "" {
+		provider = "auto"
+	}
+	var extraBody map[string]any
+	if eb, ok := entry["extra_body"].(map[string]any); ok {
+		extraBody = eb
+	} else {
+		extraBody = map[string]any{}
+	}
+	return map[string]any{
+		"task":             taskKey,
+		"provider":         provider,
+		"model":            strval(entry["model"]),
+		"base_url":         strval(entry["base_url"]),
+		"timeout":          nvl(entry["timeout"], ""),
+		"download_timeout": nvl(entry["download_timeout"], ""),
+		"max_concurrency":  nvl(entry["max_concurrency"], ""),
+		"extra_body":       extraBody,
+		"api_key_set":      strval(entry["api_key"]) != "",
+		"label":            label,
+		"description":      desc,
+	}
+}
+
+// nvl returns v when non-nil, else fallback.
+func nvl(v, fallback any) any {
+	if v == nil {
+		return fallback
+	}
+	return v
+}
+
+// auxiliaryModels mirrors api/config.py get_auxiliary_models.
+func auxiliaryModels(cfg map[string]any) map[string]any {
+	modelCfg, _ := cfg["model"].(map[string]any)
+	if modelCfg == nil {
+		modelCfg = map[string]any{}
+	}
+	mainProvider := strval(modelCfg["provider"])
+	mainModel := strval(modelCfg["default"])
+	if mainModel == "" {
+		mainModel = strval(modelCfg["name"])
+	}
+
+	auxCfg, _ := cfg["auxiliary"].(map[string]any)
+	if auxCfg == nil {
+		auxCfg = map[string]any{}
+	}
+	tasks := make([]map[string]any, 0, len(auxTaskCatalog))
+	for _, slot := range auxTaskCatalog {
+		entry, _ := auxCfg[slot.key].(map[string]any)
+		tasks = append(tasks, auxTaskPayload(slot.key, entry, slot.label, slot.description))
+	}
+
+	return map[string]any{
+		"tasks": tasks,
+		"main": map[string]any{
+			"provider":           mainProvider,
+			"model":              mainModel,
+			"supports_fast_tier": _mainModelSupportsServiceTier(mainModel, mainProvider),
+			"service_tier":       _publicMainServiceTier(modelCfg),
+			"base_url":           strval(modelCfg["base_url"]),
+			"timeout":            nvl(modelCfg["timeout"], ""),
+			"download_timeout":   nvl(modelCfg["download_timeout"], ""),
+			"max_concurrency":    nvl(modelCfg["max_concurrency"], ""),
+			"extra_body":         extraBodyOrEmpty(modelCfg["extra_body"]),
+			"api_key_set":        strval(modelCfg["api_key"]) != "",
+		},
+	}
+}
+
+func extraBodyOrEmpty(v any) map[string]any {
+	if eb, ok := v.(map[string]any); ok {
+		return eb
+	}
+	return map[string]any{}
+}
+
+func _mainModelSupportsServiceTier(modelID, provider string) bool {
+	if !_isOpenAIFamilyProvider(provider) {
+		return false
+	}
+	// WebUI compatibility fallback: OpenAI-family non-codex GPT/o-series models
+	// advertise priority tier unless the model id is explicitly codex.
+	lower := strings.ToLower(strings.TrimSpace(modelID))
+	if lower == "" {
+		return provider == "openai" || provider == "openai-api"
+	}
+	if strings.Contains(lower, "codex") {
+		return false
+	}
+	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+		return true
+	}
+	return false
+}
+
+func _isOpenAIFamilyProvider(provider string) bool {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	return p == "openai" || p == "openai-api" || p == "openai-codex"
+}
+
+func _publicMainServiceTier(modelCfg map[string]any) string {
+	if !_mainModelSupportsServiceTier(strval(modelCfg["default"]), strval(modelCfg["provider"])) {
+		return ""
+	}
+	return strval(modelCfg["service_tier"])
+}
+
+var auxSlotSet = func() map[string]bool {
+	m := map[string]bool{}
+	for _, s := range auxTaskSlots() {
+		m[s] = true
+	}
+	return m
+}()
+
+// setAuxModel mirrors api/config.py set_auxiliary_model for auxiliary scope,
+// persisting the assignment into <home>/config.yaml (comment-preserving
+// yaml.Node round-trip, same as the skills toggle path).
+func setAuxModel(home, task, provider, model string, advanced map[string]any) (map[string]any, error) {
+	configPath := filepath.Join(home, "config.yaml")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config.yaml: %w", err)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+	doc := root.Content[0]
+
+	auxNode := findMapKey(doc, "auxiliary")
+	if auxNode == nil || auxNode.Kind != yaml.MappingNode {
+		auxNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		if findMapKey(doc, "auxiliary") == nil {
+			doc.Content = append(doc.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "auxiliary"}, auxNode)
+		}
+	}
+
+	if task == "__reset__" {
+		for _, retired := range retiredAuxTaskSlots {
+			if n := findMapKey(auxNode, retired); n != nil {
+				// remove key+value pair
+				for i := 0; i+1 < len(auxNode.Content); i += 2 {
+					if auxNode.Content[i].Value == retired {
+						auxNode.Content = append(auxNode.Content[:i], auxNode.Content[i+2:]...)
+						break
+					}
+				}
+			}
+		}
+		for _, slot := range auxTaskSlots() {
+			slotNode := findMapKey(auxNode, slot)
+			if slotNode == nil || slotNode.Kind != yaml.MappingNode {
+				slotNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				auxNode.Content = append(auxNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: slot}, slotNode)
+			}
+			setMapScalar(slotNode, "provider", "auto")
+			setMapScalar(slotNode, "model", "")
+		}
+	} else {
+		if !auxSlotSet[task] {
+			return nil, fmt.Errorf("unknown auxiliary task slot: %q. Valid: %v", task, auxTaskSlots())
+		}
+		slotNode := findMapKey(auxNode, task)
+		if slotNode == nil || slotNode.Kind != yaml.MappingNode {
+			slotNode = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			auxNode.Content = append(auxNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: task}, slotNode)
+		}
+		p := provider
+		if p == "" || p == "auto" {
+			p = "auto"
+		}
+		setMapScalar(slotNode, "provider", p)
+		setMapScalar(slotNode, "model", model)
+		if strings.HasPrefix(p, "custom:") || p == "custom" {
+			// Resolve base_url from the selected custom provider entry.
+			baseURL := ""
+			if strings.HasPrefix(p, "custom:") {
+				baseURL = customProviderBaseURL(doc, strings.TrimPrefix(p, "custom:"))
+			}
+			if baseURL != "" {
+				setMapScalar(slotNode, "base_url", strings.TrimRight(baseURL, "/"))
+			}
+		}
+		if advanced != nil {
+			if err := applyAdvancedModelOptions(slotNode, advanced); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config.yaml: %w", err)
+	}
+	if err := os.WriteFile(configPath+".tmp", out, 0o644); err != nil {
+		return nil, fmt.Errorf("failed to write config.yaml: %w", err)
+	}
+	if err := os.Rename(configPath+".tmp", configPath); err != nil {
+		return nil, fmt.Errorf("failed to replace config.yaml: %w", err)
+	}
+	return map[string]any{"ok": true, "task": task, "provider": provider, "model": model}, nil
+}
+
+func setMapScalar(mapping *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1].Value = value
+			mapping.Content[i+1].Tag = "!!str"
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
+}
+
+// findMapKey returns the value node for key under a mapping node, or nil.
+func findMapKey(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// customProviderBaseURL finds the base_url for a custom:<slug> provider entry
+// in config.yaml's custom_providers list.
+func customProviderBaseURL(doc *yaml.Node, slug string) string {
+	cpNode := findMapKey(doc, "custom_providers")
+	if cpNode == nil || cpNode.Kind != yaml.SequenceNode {
+		return ""
+	}
+	for _, item := range cpNode.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		if findMapKey(item, "slug") != nil && findMapKey(item, "slug").Value == slug {
+			bu := findMapKey(item, "base_url")
+			if bu != nil {
+				return bu.Value
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// applyAdvancedModelOptions mirrors api/config.py _apply_advanced_model_options.
+func applyAdvancedModelOptions(slot *yaml.Node, advanced map[string]any) error {
+	if advanced == nil {
+		return nil
+	}
+	setOrRemove := func(key, value string, present bool) {
+		if present && value != "" {
+			setMapScalar(slot, key, value)
+		} else if !present || value == "" {
+			removeMapKey(slot, key)
+		}
+	}
+	if raw, has := advanced["base_url"]; has {
+		val := strings.TrimRight(strval(raw), "/")
+		setOrRemove("base_url", val, val != "" || strval(raw) == "")
+	}
+	for _, field := range []string{"timeout", "download_timeout", "max_concurrency"} {
+		if raw, has := advanced[field]; has {
+			n, ok := coercePositiveInt(raw, field)
+			if ok {
+				if n == "" {
+					removeMapKey(slot, field)
+				} else {
+					setMapScalar(slot, field, n)
+				}
+			}
+		}
+	}
+	if raw, has := advanced["extra_body"]; has {
+		switch eb := raw.(type) {
+		case string:
+			text := strings.TrimSpace(eb)
+			if text == "" {
+				removeMapKey(slot, "extra_body")
+			} else {
+				var parsed map[string]any
+				if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+					return fmt.Errorf("extra_body must be valid JSON")
+				}
+				if len(parsed) > 0 {
+					setMapAny(slot, "extra_body", parsed)
+				} else {
+					removeMapKey(slot, "extra_body")
+				}
+			}
+		case map[string]any:
+			if len(eb) > 0 {
+				setMapAny(slot, "extra_body", eb)
+			} else {
+				removeMapKey(slot, "extra_body")
+			}
+		default:
+			return fmt.Errorf("extra_body must be a JSON object")
+		}
+	}
+	if raw, has := advanced["service_tier"]; has {
+		val := strings.ToLower(strval(raw))
+		if val == "" || val == "default" {
+			removeMapKey(slot, "service_tier")
+		} else if val == "priority" {
+			setMapScalar(slot, "service_tier", "priority")
+		} else {
+			return fmt.Errorf("service_tier must be one of: default, priority")
+		}
+	}
+	if clear, _ := advanced["api_key_clear"].(bool); clear {
+		removeMapKey(slot, "api_key")
+	}
+	if raw, has := advanced["api_key"]; has {
+		key := strval(raw)
+		if key != "" {
+			setMapScalar(slot, "api_key", key)
+		}
+	}
+	return nil
+}
+
+// coercePositiveInt mirrors api/config.py _coerce_optional_positive_int.
+func coercePositiveInt(value any, field string) (string, bool) {
+	if value == nil {
+		return "", true
+	}
+	var s string
+	if str, ok := value.(string); ok {
+		s = str
+	} else if num, ok := value.(int); ok {
+		s = strconv.Itoa(num)
+	} else if num, ok := value.(float64); ok && num == float64(int(num)) {
+		s = strconv.Itoa(int(num))
+	} else {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return "", false
+	}
+	return s, true
+}
+
+func removeMapKey(mapping *yaml.Node, key string) {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+// setMapAny sets a mapping key to a complex (non-scalar) value.
+func setMapAny(mapping *yaml.Node, key string, value any) {
+	out, err := yaml.Marshal(value)
+	if err != nil {
+		return
+	}
+	var valNode yaml.Node
+	if err := yaml.Unmarshal(out, &valNode); err != nil {
+		return
+	}
+	vnode := valNode.Content[0]
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1] = vnode
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		vnode,
+	)
 }
 
 // countEnableSkills counts <home>/skills/**/SKILL.md, mirroring Python's
