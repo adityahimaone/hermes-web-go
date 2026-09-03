@@ -205,7 +205,7 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       process, same seam as chat — do not reimplement cron scheduling logic in Go).
       Partial: `internal/crons` now reads file-backed `jobs.json`/output safely because the current
       agent exposes no cron HTTP mutation endpoints; scheduler mutations remain proxy-backed.
-- [ ] `GET /api/crons`, `/api/crons/output`, `POST /api/crons/run|pause|resume|create`.
+- [x] `GET /api/crons`, `/api/crons/output`, `POST /api/crons/run|pause|resume|create`.
       Partial: GET list/output are native and live-verified (12 jobs from real `~/.hermes/cron/jobs.json`);
       POST mutations remain proxy-backed until an agent-side scheduler seam exists.
       Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`.
@@ -216,6 +216,16 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
 - [x] `GET /api/skills`, `/api/skills/content`, `/api/skills/usage`, `/api/memory`.
       Native and tested: `TestSkillsListRoute`, `TestSkillsUsageRoute`, `TestSkillsContentRoute`,
       `TestMemoryRoute`, plus traversal/missing-skill checks.
+- [x] **Phase-6 skills/memory writes (2026-09-03):** `POST /api/skills/save|delete|toggle` and
+      `POST /api/memory/write` are now native, mirroring the Python handlers:
+      `skillsmem.SaveSkill` (lowercase/hyphenate, traversal reject, symlink-refuse),
+      `DeleteSkill` (find by dir or frontmatter name), `ToggleSkill` (config.yaml
+      round-trip through `yaml.Node` so comments/key order survive, mirrors
+      `platform_disabled.webui` when present), `WriteMemory` (MEMORY.md/USER.md/SOUL.md,
+      symlink-refuse). Routes registered native in `internal/proxy/registry.go`.
+      Evidence: `TestSkillsSaveDeleteNative`, `TestMemoryWriteNative`,
+      `TestSkillsToggleNativePreservesConfig`, plus package-level
+      `mutations_test.go` (round-trips, symlink clobber protection, comment preservation).
       Cron mutation routes remain proxy-backed: scheduler owns jobs.json writes and exposes no
       agent-side mutation seam; Go does not reimplement scheduler logic.
 - [ ] Remove proxy fallback once cron mutation seam and remaining route inventory are green.

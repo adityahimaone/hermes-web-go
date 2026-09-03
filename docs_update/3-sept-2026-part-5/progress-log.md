@@ -92,3 +92,35 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 ## Next step
 - Any residual blueprint items beyond §2.3 list (per remaining `04-task-breakdown`
   phases) and frontend verification against the new response shapes.
+
+---
+
+## Phase 6 — skills/memory writes native (2026-09-03, third pass)
+
+## What was done
+- Added `internal/skillsmem/mutations.go` + route wiring: `POST /api/skills/save`,
+  `/api/skills/delete`, `/api/skills/toggle`, `/api/memory/write` — mirror the
+  Python handlers (validation, symlink refusal, traversal rejection).
+- `ToggleSkill` round-trips `config.yaml` through `yaml.Node` so comments and
+  key order survive (matches Python ruamel round-trip semantics); writes
+  through a `.tmp` + rename so the file is never half-written.
+- `FindSkillMD` extracted (dir-name then frontmatter-name lookup) and reused by
+  content/delete/toggle.
+- Registered the 4 write routes native in `internal/proxy/registry.go`
+  (`NativeMethods` + `NativeRoutes`).
+- Added `gopkg.in/yaml.v3` dependency.
+
+## Verification evidence (fresh, this run)
+- `go build ./...` — PASS
+- `go test ./...` — PASS (all packages)
+- `go test -race ./...` — PASS
+- `go vet ./...` — PASS
+- `git diff --check` — PASS
+- New regressions: `mutations_test.go` (7 tests: round-trips, traversal,
+  symlink-clobber protection, comment/order preservation),
+  `TestSkillsSaveDeleteNative`, `TestMemoryWriteNative`,
+  `TestSkillsToggleNativePreservesConfig`.
+
+## Next step
+- Cron mutation seam (agent-side scheduler) before proxy removal for crons;
+  remaining Phase 6/8 inventory + proxy deletion after that.

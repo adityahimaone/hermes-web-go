@@ -19,6 +19,13 @@ const maxDescription = 200
 // ErrInvalidSkillName is returned for traversal-shaped or empty skill names.
 var ErrInvalidSkillName = errors.New("invalid skill name")
 
+// ErrSymlinkedTarget is returned when a write/delete would touch a symlinked
+// SKILL.md or memory file (Python refuses these to stop symlink clobbering).
+var ErrSymlinkedTarget = errors.New("symlinked target refused")
+
+// ErrInvalidSection is returned when a memory write names an unknown section.
+var ErrInvalidSection = errors.New("section must be memory, user, or soul")
+
 // excludedDirNames mirrors tools.skills_tool._EXCLUDED_SKILL_DIRS.
 var excludedDirNames = map[string]bool{
 	".git": true, "__pycache__": true, "node_modules": true, ".venv": true, "venv": true,
@@ -193,44 +200,65 @@ func firstBodyLine(content string) string {
 // SkillContent returns the raw SKILL.md content for the skill named `name`.
 // Names are validated to be a single path segment (no traversal).
 func SkillContent(home, name string) (map[string]any, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		return nil, ErrInvalidSkillName
+	if err := validateSkillName(name); err != nil {
+		return nil, err
 	}
-	roots := skillRoots(home)
-	root := roots[0]
-	path := filepath.Join(root, name, "SKILL.md")
-	if _, err := os.Stat(path); err != nil {
-		path = ""
-		for _, searchRoot := range roots {
-			_ = filepath.WalkDir(searchRoot, func(candidate string, d os.DirEntry, walkErr error) error {
-				if walkErr != nil || path != "" {
-					return nil
-				}
-				if d.IsDir() && excludedDirNames[d.Name()] {
-					return filepath.SkipDir
-				}
-				if !d.IsDir() && d.Name() == "SKILL.md" {
-					content, err := os.ReadFile(candidate)
-					if err == nil && parseFrontmatter(string(content))["name"] == name {
-						path = candidate
-					}
-				}
-				return nil
-			})
-			if path != "" {
-				break
-			}
-		}
-	}
-	if path == "" {
-		return nil, os.ErrNotExist
+	path, err := FindSkillMD(home, name)
+	if err != nil {
+		return nil, err
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"content": string(content), "name": name}, nil
+}
+
+// validateSkillName rejects traversal-shaped, empty, or path-bearing names.
+func validateSkillName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\\`) || strings.Contains(name, "..") {
+		return ErrInvalidSkillName
+	}
+	return nil
+}
+
+// FindSkillMD locates the SKILL.md for name across all skills roots, first by
+// directory name, then by frontmatter name. Returns os.ErrNotExist when absent.
+func FindSkillMD(home, name string) (string, error) {
+	if err := validateSkillName(name); err != nil {
+		return "", err
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	roots := skillRoots(home)
+	path := filepath.Join(roots[0], name, "SKILL.md")
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	path = ""
+	for _, searchRoot := range roots {
+		_ = filepath.WalkDir(searchRoot, func(candidate string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil || path != "" {
+				return nil
+			}
+			if d.IsDir() && excludedDirNames[d.Name()] {
+				return filepath.SkipDir
+			}
+			if !d.IsDir() && d.Name() == "SKILL.md" &&
+				(strings.ToLower(filepath.Base(filepath.Dir(candidate))) == name ||
+					parseFrontmatter(readFileOrEmpty(candidate))["name"] == name) {
+				path = candidate
+			}
+			return nil
+		})
+		if path != "" {
+			break
+		}
+	}
+	if path == "" {
+		return "", os.ErrNotExist
+	}
+	return path, nil
 }
 
 // ReadUsage reads skill telemetry from <home>/skills/.usage.json.
@@ -303,4 +331,31 @@ func ReadMemory(home string) (map[string]any, error) {
 		"user_mtime":   userMtime,
 		"soul_mtime":   soulMtime,
 	}, nil
+}
+
+// WriteMemory writes MEMORY.md/USER.md (under memories/) or SOUL.md (home
+// root) with content, mirroring Python _handle_memory_write: refuse symlinked
+// targets, return the target path on success.
+func WriteMemory(home, section, content string) (string, error) {
+	var target string
+	switch section {
+	case "memory":
+		target = filepath.Join(home, "memories", "MEMORY.md")
+	case "user":
+		target = filepath.Join(home, "memories", "USER.md")
+	case "soul":
+		target = filepath.Join(home, "SOUL.md")
+	default:
+		return "", ErrInvalidSection
+	}
+	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return "", ErrSymlinkedTarget
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return target, nil
 }

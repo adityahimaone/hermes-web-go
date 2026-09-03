@@ -57,6 +57,10 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/file/delete":       {http.MethodPost: true},
 	"/api/upload":            {http.MethodPost: true},
 	"/api/session/export":    {http.MethodGet: true},
+	"/api/skills/save":       {http.MethodPost: true},
+	"/api/skills/delete":     {http.MethodPost: true},
+	"/api/skills/toggle":     {http.MethodPost: true},
+	"/api/memory/write":      {http.MethodPost: true},
 }
 
 func IsNativeMethod(method, path string) bool {
@@ -84,6 +88,10 @@ var NativeRoutes = map[string]bool{
 	"/api/file/delete":       true,
 	"/api/upload":            true,
 	"/api/session/export":    true,
+	"/api/skills/save":       true,
+	"/api/skills/delete":     true,
+	"/api/skills/toggle":     true,
+	"/api/memory/write":      true,
 }
 
 func IsNative(path string) bool { return NativeRoutes[path] }
