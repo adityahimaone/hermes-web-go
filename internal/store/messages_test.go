@@ -30,3 +30,24 @@ func TestAppendMessage(t *testing.T) {
 		t.Fatalf("messages = %s", row.Messages)
 	}
 }
+
+func TestAppendMessageConcurrentSessionsNoBusy(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "webui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, sid := range []string{"a", "b"} {
+		if err := CreateSession(db, SessionImport{ID: sid, Messages: "[]"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 2)
+	go func() { done <- AppendMessage(db, "a", map[string]any{"role": "user", "content": "hi a"}) }()
+	go func() { done <- AppendMessage(db, "b", map[string]any{"role": "user", "content": "hi b"}) }()
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatalf("concurrent AppendMessage: %v", err)
+		}
+	}
+}
