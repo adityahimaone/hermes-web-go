@@ -18,10 +18,10 @@ import (
 )
 
 // jobIDRe mirrors Python's cron job_id boundary exactly.
-var jobIDRe = validJobID
+var jobIDRe = ValidJobID
 
-// validJobID checks the Python cron job_id regex boundary.
-func validJobID(id string) bool {
+// ValidJobID checks the Python cron job_id regex boundary.
+func ValidJobID(id string) bool {
 	if id == "" || id == "." || id == ".." || len(id) > 64 {
 		return false
 	}

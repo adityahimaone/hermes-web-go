@@ -22,10 +22,16 @@ import (
 type routerOpt struct {
 	hermesHome string
 	auth       *auth.Auth
+	cron       agentclient.CronMutator
 }
 
 // RouterOption mutates router construction options.
 type RouterOption func(*routerOpt)
+
+// WithCronMutator wires scheduler mutations to the agent gateway.
+func WithCronMutator(c agentclient.CronMutator) RouterOption {
+	return func(o *routerOpt) { o.cron = c }
+}
 
 // WithHermesHome pins the Hermes home directory used to resolve cron/skills
 // file state. Defaults to $HOME/.hermes when unset.
@@ -119,7 +125,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	if st != nil {
 		ApprovalRouter(r, st)
 	}
-	CronsRouter(r, routerHermesHome(o))
+	CronsRouter(r, routerHermesHome(o), o.cron)
 	SkillsMemRouter(r, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
@@ -151,7 +157,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		DataRouter(r, db, dataRoot)
 	}
 
-	CronsRouter(r, routerHermesHome(o))
+	CronsRouter(r, routerHermesHome(o), o.cron)
 	SkillsMemRouter(r, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)

@@ -3,6 +3,7 @@ package agentclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"google.golang.org/grpc"
@@ -70,6 +71,14 @@ func (g *GRPCClient) RunTurn(ctx context.Context, req TurnRequest) (<-chan TurnE
 		}
 	}()
 	return out, nil
+}
+
+func (g *GRPCClient) CronMutation(ctx context.Context, action, jobID, profile string, payload []byte) (int, []byte, error) {
+	c, ok := g.fallback.(CronMutator)
+	if !ok {
+		return 0, nil, fmt.Errorf("grpc cron mutation unavailable")
+	}
+	return c.CronMutation(ctx, action, jobID, profile, payload)
 }
 
 func (g *GRPCClient) Cancel(ctx context.Context, sessionID string) error {

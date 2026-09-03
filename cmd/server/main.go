@@ -125,6 +125,7 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, opts...)
 	}
 	httpFallback := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
+	opts = append(opts, httpserver.WithCronMutator(httpFallback))
 	mode := agentclient.TransportMode(cfg.AgentTransport)
 	if mode == "" {
 		mode = agentclient.TransportAuto

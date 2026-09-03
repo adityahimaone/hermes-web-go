@@ -143,6 +143,45 @@ func (c *HTTPClient) readEvents(ctx context.Context, runID string, out chan<- Tu
 	}
 }
 
+func (c *HTTPClient) CronMutation(ctx context.Context, action, jobID, profile string, payload []byte) (int, []byte, error) {
+	path := "/api/jobs"
+	method := http.MethodPost
+	var body any
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &body); err != nil {
+			return 0, nil, fmt.Errorf("invalid cron payload: %w", err)
+		}
+		// gateway create/update expects "prompt"; WebUI form sends "command".
+		if m, ok := body.(map[string]any); ok && (action == "create" || action == "update") {
+			if cmd, has := m["command"]; has {
+				if _, hasPrompt := m["prompt"]; !hasPrompt {
+					m["prompt"] = cmd
+				}
+				delete(m, "command")
+			}
+		}
+	}
+	if profile != "" && profile != "default" {
+		path = "/p/" + profile + path
+	}
+	if action == "update" {
+		path += "/" + jobID
+		method = http.MethodPatch
+	} else if action == "delete" {
+		path += "/" + jobID
+		method = http.MethodDelete
+	} else if action != "create" {
+		path += "/" + jobID + "/" + action
+	}
+	resp, err := c.request(ctx, method, path, body, "application/json")
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, err
+}
+
 func (c *HTTPClient) Cancel(ctx context.Context, sessionID string) error {
 	resp, err := c.request(ctx, http.MethodPost, "/v1/runs/"+sessionID+"/cancel", map[string]any{}, "application/json")
 	if err != nil {

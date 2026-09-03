@@ -55,3 +55,8 @@ type AgentClient interface {
 	// Cancel stops an in-flight turn. sessionID is the WebUI session id.
 	Cancel(ctx context.Context, sessionID string) error
 }
+
+// CronMutator forwards scheduler ownership to the agent gateway.
+type CronMutator interface {
+	CronMutation(ctx context.Context, action, jobID, profile string, payload []byte) (int, []byte, error)
+}
