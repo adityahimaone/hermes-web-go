@@ -1,0 +1,697 @@
+package httpserver
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ── provider display names ────────────────────────────────────────────────
+// Mirrors api/providers.py _PROVIDER_DISPLAY (id → human label). Entries not
+// present fall back to the id itself, matching the Python effective name.
+var providerDisplayNames = map[string]string{
+	"openai":        "OpenAI",
+	"anthropic":     "Anthropic",
+	"openrouter":    "OpenRouter",
+	"gemini":        "Google Gemini",
+	"xai":           "xAI (Grok)",
+	"deepseek":      "DeepSeek",
+	"together":      "Together AI",
+	"groq":          "Groq",
+	"mistral":       "Mistral",
+	"zai":           "Z.ai (GLM)",
+	"moonshotai":    "Moonshot AI",
+	"openai-codex":  "OpenAI Codex (OAuth)",
+	"copilot":       "GitHub Copilot",
+	"nous":          "Nous Research",
+	"lmstudio":      "LM Studio",
+	"ollama":        "Ollama",
+	"custom":        "Custom (OpenAI-compatible)",
+	"openai-api":    "OpenAI (API)",
+	"openai-compat": "OpenAI-compatible",
+	"kimi-coding":   "Kimi",
+	"opencode-zen":  "OpenCode Zen",
+	"xai-oauth":     "xAI (OAuth)",
+	"copilot-acp":   "Copilot ACP",
+	"moa":           "MOA",
+}
+
+// ── models cache ──────────────────────────────────────────────────────────
+// In-memory TTL cache. Python keeps an on-disk cache + 24h TTL + live
+// rebuild; Go keeps a process-local 10-min TTL so a running server serves a
+// consistent list without hammering provider endpoints, and refresh
+// invalidates it immediately.
+
+type modelsCacheEntry struct {
+	payload   any
+	expiresAt time.Time
+}
+
+var (
+	modelsCacheMu   sync.Mutex
+	modelsCache     = map[string]modelsCacheEntry{}
+	liveModelsCache = map[string]modelsCacheEntry{}
+)
+
+func invalidateProviderModelsCache(providerID string) {
+	modelsCacheMu.Lock()
+	defer modelsCacheMu.Unlock()
+	delete(modelsCache, "catalog:"+providerID)
+	delete(liveModelsCache, providerID)
+}
+
+// ── /api/models (catalog) ────────────────────────────────────────────────
+// Shape parity with api/config.py get_available_models():
+//   {"active_provider": str|None, "default_model": str,
+//    "groups": [{"provider": str, "provider_id": str, "models": [{"id","label"}]}]}
+// Network-free static catalog (Python's hardcoded _PROVIDER_MODELS fallback).
+
+func configModelSection(home string) map[string]any {
+	cfg, _ := readConfigYAML(home)
+	if m, ok := cfg["model"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+func availableModelsCatalog(home string, sessionVisit bool) map[string]any {
+	modelCfg := configModelSection(home)
+	activeProvider := strings.ToLower(strings.TrimSpace(strval(modelCfg["provider"])))
+	defaultModel := strings.TrimSpace(strval(modelCfg["default"]))
+
+	cacheKey := "catalog:" + activeProvider
+	modelsCacheMu.Lock()
+	if e, ok := modelsCache[cacheKey]; ok && time.Now().Before(e.expiresAt) && !sessionVisit {
+		modelsCacheMu.Unlock()
+		return e.payload.(map[string]any)
+	}
+	modelsCacheMu.Unlock()
+
+	groups := buildCatalogGroups(home, activeProvider, defaultModel)
+
+	resp := map[string]any{
+		"active_provider": nil,
+		"default_model":   defaultModel,
+		"groups":          groups,
+	}
+	if activeProvider != "" {
+		resp["active_provider"] = activeProvider
+	}
+
+	if !sessionVisit {
+		modelsCacheMu.Lock()
+		modelsCache[cacheKey] = modelsCacheEntry{payload: resp, expiresAt: time.Now().Add(10 * time.Minute)}
+		modelsCacheMu.Unlock()
+	}
+	return resp
+}
+
+func buildCatalogGroups(home, activeProvider, defaultModel string) []any {
+	type groupEntry struct {
+		provider   string
+		providerID string
+		models     []any
+	}
+
+	var groups []groupEntry
+	seen := map[string]bool{}
+
+	// Active provider first
+	if activeProvider != "" {
+		models := staticModelsForID(activeProvider)
+		if len(models) > 0 {
+			groups = append(groups, groupEntry{
+				provider:   providerDisplayName(activeProvider),
+				providerID: activeProvider,
+				models:     models,
+			})
+			seen[activeProvider] = true
+		}
+	}
+
+	// Then all known providers sorted
+	var ids []string
+	for pid := range staticProviderModels {
+		if !seen[pid] {
+			ids = append(ids, pid)
+		}
+	}
+	sort.Strings(ids)
+	for _, pid := range ids {
+		models := staticModelsForID(pid)
+		if len(models) == 0 {
+			continue
+		}
+		groups = append(groups, groupEntry{
+			provider:   providerDisplayName(pid),
+			providerID: pid,
+			models:     models,
+		})
+	}
+
+	out := make([]any, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, map[string]any{
+			"provider":    g.provider,
+			"provider_id": g.providerID,
+			"models":      g.models,
+		})
+	}
+	return out
+}
+
+func staticModelsForID(pid string) []any {
+	raw, ok := staticProviderModels[pid]
+	if !ok {
+		return nil
+	}
+	out := make([]any, 0, len(raw))
+	for _, m := range raw {
+		out = append(out, map[string]any{"id": m, "label": m})
+	}
+	return out
+}
+
+// ── /api/models/live ────────────────────────────────────────────────────
+// Shape parity with api/routes.py _handle_live_models():
+//   [{"ok": true, "provider": str, "models": [{"id","label"}], "source": str}]
+//   or {"ok": false, "error": str, "models": []any{}}
+// Go implements the generic OpenAI-compat /v1/models live fetch (custom,
+// openai, openrouter, deepseek, together, groq, mistral, zai, nous, kimi,
+// opencode-zen); providers with non-standard endpoints fall back to the
+// static list (same behaviour as Python's provider_model_ids() fallback).
+// hermes_cli OAuth providers (openai-codex, copilot, xai-oauth) are NOT
+// ported — their auth + token-exchange lives in the agent; the Go server
+// serves the static curated list and documents the gap.
+
+func liveModelsForProvider(home, provider string) map[string]any {
+	provider = resolveProviderAlias(provider)
+
+	modelsCacheMu.Lock()
+	if e, ok := liveModelsCache[provider]; ok && time.Now().Before(e.expiresAt) {
+		modelsCacheMu.Unlock()
+		return e.payload.(map[string]any)
+	}
+	modelsCacheMu.Unlock()
+
+	var payload map[string]any
+	cfg, _ := readConfigYAML(home)
+	modelCfg := map[string]any{}
+	if m, ok := cfg["model"].(map[string]any); ok {
+		modelCfg = m
+	}
+
+	baseURL := strings.TrimSpace(strval(modelCfg["base_url"]))
+	apiKey := ""
+
+	// Custom providers resolve base_url + key from the custom_providers entry.
+	if provider == "custom" || strings.HasPrefix(provider, "custom:") {
+		cp := findCustomProviderEntry(cfg, provider)
+		if cp != nil {
+			if bu, ok := cp["base_url"].(string); ok {
+				baseURL = strings.TrimSpace(bu)
+			}
+			apiKey = customProviderAPIKey(cp)
+		} else {
+			baseURL = strings.TrimSpace(strval(modelCfg["base_url"]))
+			apiKey = strings.TrimSpace(strval(modelCfg["api_key"]))
+		}
+	} else {
+		apiKey = providerKeyFromEnv(home, provider)
+		if apiKey == "" {
+			apiKey = strings.TrimSpace(strval(modelCfg["api_key"]))
+		}
+	}
+
+	ids, err := fetchOpenAICompatModels(baseURL, apiKey)
+	if err != nil || len(ids) == 0 {
+		// Static fallback — same as Python's provider_model_ids() fallback.
+		static := staticModelsForID(provider)
+		if static != nil {
+			payload = map[string]any{
+				"ok":       true,
+				"provider": provider,
+				"models":   static,
+				"source":   "static",
+			}
+		} else {
+			payload = map[string]any{"ok": false, "error": "no_models", "models": []any{}}
+		}
+	} else {
+		models := make([]any, 0, len(ids))
+		for _, m := range ids {
+			models = append(models, map[string]any{"id": m, "label": m})
+		}
+		payload = map[string]any{
+			"ok":       true,
+			"provider": provider,
+			"models":   models,
+			"source":   "live",
+		}
+	}
+
+	modelsCacheMu.Lock()
+	liveModelsCache[provider] = modelsCacheEntry{payload: payload, expiresAt: time.Now().Add(5 * time.Minute)}
+	modelsCacheMu.Unlock()
+	return payload
+}
+
+// resolveProviderAlias mirrors api/config.py _resolve_provider_alias.
+func resolveProviderAlias(p string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case "z.ai", "z-ai":
+		return "zai"
+	case "x.ai", "x-ai":
+		return "xai"
+	case "moon", "moonshot":
+		return "moonshotai"
+	case "kimi":
+		return "kimi-coding"
+	case "openai-codex":
+		return "openai-codex"
+	default:
+		return strings.ToLower(strings.TrimSpace(p))
+	}
+}
+
+func findCustomProviderEntry(cfg map[string]any, provider string) map[string]any {
+	cps, ok := cfg["custom_providers"].([]any)
+	if !ok {
+		if seq, ok2 := cfg["custom_providers"].([]map[string]any); ok2 {
+			cps = make([]any, 0, len(seq))
+			for _, s := range seq {
+				cps = append(cps, s)
+			}
+		}
+	}
+	slug := strings.TrimPrefix(provider, "custom:")
+	for _, item := range cps {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strval(entry["name"])
+		if provider == "custom" && name == "" {
+			return entry
+		}
+		if customProviderSlug(name) == slug {
+			return entry
+		}
+	}
+	return nil
+}
+
+func customProviderAPIKey(cp map[string]any) string {
+	raw := cp["api_key"]
+	if raw != nil {
+		key := strings.TrimSpace(strval(raw))
+		if strings.HasPrefix(key, "${") && strings.HasSuffix(key, "}") && len(key) > 3 {
+			return strings.TrimSpace(os.Getenv(key[2 : len(key)-1]))
+		}
+		if key != "" {
+			return key
+		}
+	}
+	env := strings.TrimSpace(strval(cp["key_env"]))
+	if env != "" {
+		return strings.TrimSpace(os.Getenv(env))
+	}
+	return ""
+}
+
+// customProviderSlug mirrors api/config.py _custom_provider_slug_from_name.
+func customProviderSlug(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevDash := true
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			prevDash = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		case r == ' ' || r == '_' || r == '-' || r == '.':
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func providerKeyFromEnv(home, provider string) string {
+	envVar := providerEnvVar(provider)
+	if envVar == "" {
+		return ""
+	}
+	if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+		return v
+	}
+	envPath := filepath.Join(home, ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		if strings.TrimSpace(kv[0]) == envVar {
+			return strings.Trim(strings.TrimSpace(kv[1]), `"'`)
+		}
+	}
+	return ""
+}
+
+// fetchOpenAICompatModels GETs <base_url>/v1/models (or /models if base_url
+// already ends in /v1) with a Bearer key. Mirrors the urllib fetch in
+// api/routes.py _handle_live_models for custom providers.
+func fetchOpenAICompatModels(baseURL, apiKey string) ([]string, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" || apiKey == "" {
+		return nil, fmt.Errorf("base_url or api_key missing")
+	}
+	ep := strings.TrimSuffix(baseURL, "/")
+	if strings.HasSuffix(ep, "/v1") {
+		ep += "/models"
+	} else {
+		ep += "/v1/models"
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, ep, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, m := range parsed.Data {
+		id := strings.TrimSpace(m.ID)
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// ── /api/providers ────────────────────────────────────────────────────────
+// Shape parity with api/providers.py get_providers():
+//   {"providers": [{"id","display_name","has_key","configurable","key_source",
+//                   "models","is_oauth","auth_error"}]}
+// hermes_cli auth probes (OAuth status, plugin providers) are NOT ported —
+// key_source derives from .env / config.yaml presence. Documented gap.
+
+func providersList(home string) map[string]any {
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	providersCfg := map[string]any{}
+	if m, ok := cfg["providers"].(map[string]any); ok {
+		providersCfg = m
+	}
+
+	known := map[string]bool{}
+	for pid := range staticProviderModels {
+		known[pid] = true
+	}
+	for pid := range providerDisplayNames {
+		known[pid] = true
+	}
+	for pid := range providersCfg {
+		known[strings.ToLower(pid)] = true
+	}
+	for pid := range oauthProviders {
+		known[pid] = true
+	}
+
+	envKeys := map[string]string{}
+	if data, err := os.ReadFile(filepath.Join(home, ".env")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			kv := strings.SplitN(line, "=", 2)
+			if len(kv) == 2 {
+				envKeys[strings.TrimSpace(kv[0])] = strings.Trim(strings.TrimSpace(kv[1]), `"'`)
+			}
+		}
+	}
+
+	var ids []string
+	for pid := range known {
+		ids = append(ids, pid)
+	}
+	sort.Strings(ids)
+
+	providers := make([]any, 0, len(ids))
+	for _, pid := range ids {
+		hasKey := false
+		keySource := "none"
+		if oauthProviders[pid] {
+			keySource = "oauth"
+			hasKey = true
+		}
+		envVar := providerEnvVar(pid)
+		if envVar != "" {
+			envVal := strings.TrimSpace(os.Getenv(envVar))
+			if envVal == "" {
+				envVal = envKeys[envVar]
+			}
+			if envVal != "" {
+				hasKey = true
+				if keySource == "none" {
+					keySource = "env_file"
+				}
+			}
+		}
+		// config.yaml providers / model sections may carry api_key
+		if !hasKey {
+			if pc, ok := providersCfg[pid].(map[string]any); ok {
+				if strings.TrimSpace(strval(pc["api_key"])) != "" {
+					hasKey = true
+					keySource = "config_yaml"
+				}
+			}
+			if !hasKey && pid == strings.ToLower(strings.TrimSpace(strval(configModelSection(home)["provider"]))) {
+				if strings.TrimSpace(strval(configModelSection(home)["api_key"])) != "" {
+					hasKey = true
+					keySource = "config_yaml"
+				}
+			}
+		}
+
+		models := staticModelsForID(pid)
+		if models == nil {
+			models = []any{}
+		}
+		providers = append(providers, map[string]any{
+			"id":           pid,
+			"display_name": providerDisplayName(pid),
+			"has_key":      hasKey,
+			"configurable": envVar != "" || pid == "custom" || strings.HasPrefix(pid, "custom:"),
+			"key_source":   keySource,
+			"models":       models,
+			"is_oauth":     oauthProviders[pid],
+		})
+	}
+
+	return map[string]any{"providers": providers}
+}
+
+// ── /api/providers/self-hosted ───────────────────────────────────────────
+// Mirrors api/onboarding.py apply_self_hosted_provider_setup for the two
+// supported self-hosted providers (ollama, lmstudio). Writes provider config
+// + .env key, then invalidates the models cache.
+// Shape: {"ok": true, "provider": str, "base_url": str} + "model" when active.
+
+var selfHostedSetups = map[string]struct {
+	envVar string
+}{
+	"ollama":   {envVar: "OLLAMA_API_KEY"},
+	"lmstudio": {envVar: "LMSTUDIO_API_KEY"},
+}
+
+func applySelfHostedProviderSetup(home string, body map[string]any) (map[string]any, error) {
+	provider := strings.ToLower(strings.TrimSpace(strval(body["provider"])))
+	model := strings.TrimSpace(strval(body["model"]))
+	apiKey := strings.TrimSpace(strval(body["api_key"]))
+	baseURL := strings.TrimSpace(strval(body["base_url"]))
+	activate := body["activate"]
+	doActivate := activate == nil || truthy(activate)
+
+	meta, ok := selfHostedSetups[provider]
+	if !ok {
+		return nil, fmt.Errorf("unsupported self-hosted provider: %s", provider)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if baseURL == "" {
+		return nil, fmt.Errorf("base_url is required for this provider")
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("base_url must start with http:// or https://")
+	}
+
+	cfg, _ := readConfigYAML(home)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	providersCfg := map[string]any{}
+	if m, ok := cfg["providers"].(map[string]any); ok {
+		providersCfg = m
+	}
+	providerCfg := map[string]any{}
+	if m, ok := providersCfg[provider].(map[string]any); ok {
+		providerCfg = m
+	}
+	providerCfg["base_url"] = baseURL
+	providersCfg[provider] = providerCfg
+	mutateConfigRoot(cfg, "providers", providersCfg)
+
+	modelCfg := map[string]any{}
+	if m, ok := cfg["model"].(map[string]any); ok {
+		modelCfg = m
+	}
+	if doActivate {
+		modelCfg["provider"] = provider
+		modelCfg["default"] = normalizeModelForProvider(provider, model)
+		modelCfg["base_url"] = baseURL
+		mutateConfigRoot(cfg, "model", modelCfg)
+	}
+	if err := writeConfigYAML(home, cfg); err != nil {
+		return nil, err
+	}
+
+	if apiKey != "" && meta.envVar != "" {
+		if err := writeEnvFileKey(home, meta.envVar, apiKey); err != nil {
+			return nil, err
+		}
+	}
+
+	result := map[string]any{"ok": true, "provider": provider, "base_url": baseURL}
+	if doActivate {
+		result["model"] = strval(modelCfg["default"])
+	}
+	invalidateProviderModelsCache(provider)
+	return result, nil
+}
+
+func normalizeModelForProvider(provider, model string) string {
+	clean := strings.TrimSpace(model)
+	if clean == "" {
+		return ""
+	}
+	if (provider == "anthropic" || provider == "openai") && strings.HasPrefix(clean, provider+"/") {
+		return strings.SplitN(clean, "/", 2)[1]
+	}
+	return clean
+}
+
+// ── config.yaml write helpers (yaml.Node round-trip, comment-preserving) ──
+
+func mutateConfigRoot(cfg map[string]any, key string, value map[string]any) {
+	cfg[key] = value
+}
+
+func writeConfigYAML(home string, cfg map[string]any) error {
+	path := filepath.Join(home, "config.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data)
+}
+
+func atomicWriteFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// writeEnvFileKey rewrites .env preserving all other lines/comments and
+// replaces or appends the given key. Mirrors api/providers.py _write_env_file.
+func writeEnvFileKey(home, key, value string) error {
+	envPath := filepath.Join(home, ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		kv := strings.SplitN(trimmed, "=", 2)
+		if len(kv) == 2 && strings.TrimSpace(kv[0]) == key {
+			lines[i] = key + "=" + value
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, key+"="+value)
+	}
+	return atomicWriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"))
+}
+
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
+}

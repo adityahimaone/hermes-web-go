@@ -1026,3 +1026,212 @@ func TestProfileDeleteDefaultRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
+
+// ── Family-2 network-probe routes ────────────────────────────────────────
+
+func TestModelsCatalogStatic(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-4o\n  provider: openai\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/models", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["active_provider"] != "openai" {
+		t.Errorf("active_provider = %v, want openai", resp["active_provider"])
+	}
+	if resp["default_model"] != "gpt-4o" {
+		t.Errorf("default_model = %v, want gpt-4o", resp["default_model"])
+	}
+	groups, _ := resp["groups"].([]any)
+	if len(groups) < 1 {
+		t.Fatalf("groups empty")
+	}
+	first, _ := groups[0].(map[string]any)
+	if first["provider_id"] != "openai" {
+		t.Errorf("first group provider_id = %v, want openai (active first)", first["provider_id"])
+	}
+	models, _ := first["models"].([]any)
+	if len(models) < 1 {
+		t.Errorf("first group models empty")
+	}
+}
+
+func TestModelsCatalogFreshnessUnknown(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodGet, "/api/models?freshness=bogus", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestModelsCatalogSessionVisit(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/models?freshness=session_visit", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["active_provider"] != "custom" {
+		t.Errorf("active_provider = %v, want custom", resp["active_provider"])
+	}
+}
+
+func TestModelsLiveNoProvider(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/models/live", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["error"] != "no_provider" {
+		t.Errorf("error = %v, want no_provider", resp["error"])
+	}
+}
+
+func TestModelsLiveStaticFallback(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-4o\n  provider: openai\n")
+	// no .env key + no reachable endpoint → static fallback
+	rr := auxRequest(t, home, http.MethodGet, "/api/models/live?provider=openai", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["ok"] != true || resp["source"] != "static" {
+		t.Errorf("resp = %v, want ok/static fallback", resp)
+	}
+	models, _ := resp["models"].([]any)
+	if len(models) == 0 {
+		t.Errorf("static fallback models empty")
+	}
+}
+
+func TestModelsRefreshInvalidates(t *testing.T) {
+	home := t.TempDir()
+	// Prime the live cache
+	liveModelsForProvider(home, "openai")
+	rr := auxRequest(t, home, http.MethodPost, "/api/models/refresh", `{"provider":"openai"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["ok"] != true || resp["provider"] != "openai" {
+		t.Errorf("resp = %v, want ok/openai", resp)
+	}
+	modelsCacheMu.Lock()
+	_, still := liveModelsCache["openai"]
+	modelsCacheMu.Unlock()
+	if still {
+		t.Errorf("live cache not invalidated after refresh")
+	}
+}
+
+func TestModelsRefreshRequiresProvider(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/models/refresh", `{}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestProvidersList(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-4o\n  provider: openai\n")
+	writeHomeFile(t, home, ".env", "OPENAI_API_KEY=sk-openai-12345678\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/providers", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	list, _ := resp["providers"].([]any)
+	if len(list) < 10 {
+		t.Fatalf("providers len = %d, want many", len(list))
+	}
+	found := false
+	for _, item := range list {
+		p, _ := item.(map[string]any)
+		if p["id"] == "openai" {
+			found = true
+			if p["display_name"] != "OpenAI" {
+				t.Errorf("display_name = %v", p["display_name"])
+			}
+			if p["has_key"] != true {
+				t.Errorf("openai has_key = %v, want true (env key)", p["has_key"])
+			}
+			if p["key_source"] != "env_file" {
+				t.Errorf("openai key_source = %v, want env_file", p["key_source"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("openai not in providers list")
+	}
+}
+
+func TestProvidersSelfHostedSetup(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers/self-hosted",
+		`{"provider":"ollama","model":"llama3.1","base_url":"http://localhost:11434"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["ok"] != true || resp["provider"] != "ollama" {
+		t.Errorf("resp = %v, want ok/ollama", resp)
+	}
+	cfg, err := readConfigYAML(home)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	mc, _ := cfg["model"].(map[string]any)
+	if mc["provider"] != "ollama" || mc["default"] != "llama3.1" {
+		t.Errorf("model = %v, want ollama/llama3.1 activated", mc)
+	}
+	pc, _ := cfg["providers"].(map[string]any)
+	oc, _ := pc["ollama"].(map[string]any)
+	if oc["base_url"] != "http://localhost:11434" {
+		t.Errorf("providers.ollama = %v", oc)
+	}
+}
+
+func TestProvidersSelfHostedUnsupported(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers/self-hosted",
+		`{"provider":"vllm","model":"x","base_url":"http://localhost:8000"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestProvidersSelfHostedMissingBaseURL(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodPost, "/api/providers/self-hosted",
+		`{"provider":"ollama","model":"llama3.1"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}

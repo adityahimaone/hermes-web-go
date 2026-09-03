@@ -387,6 +387,82 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		}
 		writeJSON(w, map[string]any{"ok": true, "name": name})
 	})
+
+	// ── Family-2 network-probe routes ─────────────────────────────────────
+	r.Get("/api/models", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		freshness := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("freshness")))
+		if freshness == "session_visit" {
+			writeJSON(w, availableModelsCatalog(home, true))
+			return
+		}
+		if freshness != "" {
+			writeError(w, http.StatusBadRequest, "unknown models freshness: "+freshness)
+			return
+		}
+		writeJSON(w, availableModelsCatalog(home, false))
+	})
+
+	r.Get("/api/models/live", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		prov := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("provider")))
+		if prov == "" {
+			modelCfg := configModelSection(home)
+			prov = strings.ToLower(strings.TrimSpace(strval(modelCfg["provider"])))
+			if prov == "" {
+				writeJSON(w, map[string]any{"error": "no_provider", "models": []any{}})
+				return
+			}
+		}
+		writeJSON(w, liveModelsForProvider(home, prov))
+	})
+
+	r.Post("/api/models/refresh", func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		providerID := strings.ToLower(strings.TrimSpace(strval(body["provider"])))
+		if providerID == "" {
+			writeError(w, http.StatusBadRequest, "provider is required")
+			return
+		}
+		invalidateProviderModelsCache(providerID)
+		writeJSON(w, map[string]any{"ok": true, "provider": providerID})
+	})
+
+	r.Get("/api/providers", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		writeJSON(w, providersList(home))
+	})
+
+	r.Post("/api/providers/self-hosted", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		resp, err := applySelfHostedProviderSetup(home, body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, resp)
+	})
 }
 
 // settingsDefaults mirrors api/config.py _SETTINGS_DEFAULTS. A stored value in
