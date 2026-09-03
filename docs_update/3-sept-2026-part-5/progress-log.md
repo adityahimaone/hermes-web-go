@@ -98,23 +98,33 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 ## Family-2 config-driven reads native — slice 1 (2026-09-03, fifth pass)
 
 ## What was done
-- Added `internal/httpserver/config_router.go` (`ConfigRouter(r, hermesHome)`),
+- Added `internal/httpserver/config_router.go` (`ConfigRouter(r, hermesHome, dataRoot)`),
   mounted in BOTH router constructors next to `ConversationRoundsRouter`.
-  No DB/agent dependency — reads config.yaml / profile dirs directly.
-- `GET /api/profile/active` — mirrors Python: name from HERMES_HOME basename
-  when it sits under `profiles/` (else "default"), `is_default`,
-  `default_workspace` from profile-scoped `last_workspace.txt` → config.yaml
-  `workspace`/`default_workspace` → `terminal.cwd`.
-- `GET /api/profiles` — mirrors `_build_profile_rows_fast` row shape
+  No DB/agent dependency — reads config.yaml / profile dirs / webui settings
+  (dataRoot) directly.
+- `GET /api/profile/active` — name from HERMES_HOME basename when under
+  `profiles/` (else "default"), `is_default`, `default_workspace` from
+  profile-scoped `last_workspace.txt` → config.yaml `workspace`/
+  `default_workspace` → `terminal.cwd`.
+- `GET /api/profiles` — `_build_profile_rows_fast` row shape
   (`name/path/is_default/is_active/gateway_running/model/provider/has_env/
-  visible/skill_count/enabled_skills/total_skills`), base home row "default"
-  + named `profiles/<name>` dirs (regex `[a-z0-9][a-z0-9_-]{0,63}`),
-  `visible:false` from `profile.yaml`, skill_count from `skills/**/SKILL.md`
-  walk, model/provider from config.yaml `model.default`/`model.provider`.
-  `single_profile_mode: false` always (isolated flag is a Python-launcher
-  posture, not plumbed to Go yet).
-- Registered both native in `internal/proxy/registry.go` (`NativeMethods`
-  GET + `NativeRoutes`).
+  visible/skill_count/enabled_skills/total_skills`), base home row "default" +
+  named `profiles/<name>` dirs (regex `[a-z0-9][a-z0-9_-]{0,63}`),
+  `visible:false` from `profile.yaml`, skill_count from `skills/**/SKILL.md`,
+  model/provider from config.yaml.
+- `GET /api/settings` added to ConfigRouter: mirrors Python `load_settings()` —
+  ~90-key `_SETTINGS_DEFAULTS` clone + stored `dataRoot/settings.json` merge,
+  legacy migrations (busy_input_mode→default_message_mode, show_cli_sessions
+  grandfather for established installs, virtualize_transcript force-off without
+  optin marker), appearance normalize (theme light/dark/system, skin), route
+  injections (`persisted_speech_keys` sorted, `password_hash` popped,
+  `default_model`/`default_model_provider` from config.yaml).
+- Known gaps vs Python (documented): `max_tokens*` (needs get_max_tokens_status
+  from config), `password_env_var`/`auth_enabled`/`password_auth_enabled`/passkeys
+  (auth module), `webui_version`/`agent_version`/`update_channel*` (updates
+  module) — these stay absent until auth/version module ports.
+- Registered `/api/settings` GET native in `internal/proxy/registry.go`
+  (`NativeMethods` + `NativeRoutes`).
 
 ## Verification evidence (fresh, this run)
 - `go build ./...`, `go test ./...`, `go vet ./...`, `git diff --check`,
@@ -125,7 +135,11 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   `TestProfilesListNamedActive` (active=karina, is_active per row),
   `TestProfilesHiddenProfile` (visible:false), plus
   `TestConfigRouterNativeNoProxyFallback` (full router, Teapot proxy — native
-  answers 200).
+  answers 200), `TestSettingsDefaults` (defaults + config.yaml model + no
+  password_hash leak), `TestSettingsStoredMerge`, `TestSettingsShowCliSessions
+  Grandfather`, `TestSettingsShowCliSessionsFresh`, `TestSettingsVirtualize
+  TranscriptForceOff`, `TestSettingsVirtualizeTranscriptOptinHonored`,
+  `TestSettingsSpeechKeysPersisted` (sorted list).
 - Known gaps vs Python (documented, not silent): `gateway_running` hardcoded
   false (no gateway probe), `skill_count` counts every SKILL.md (Python
   compatible-count may differ), status/kanban enrichment skipped,
@@ -207,10 +221,10 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
   config — separate "agent boundary" family, not DB projection.
 
 ## Next step
-- Family-2 route roadmap: settings (GET/POST), models (GET/live/refresh/set/auxiliary),
-  providers (GET/delete/self-hosted/quota/cost-history), profile mutations
-  (create/switch/delete/update). Slice 2 = config-file reads (settings, models);
-  slice 3 = auth-bound POST mutations (cookie Set-Cookie, file writes).
+- Family-2 route roadmap: settings POST (write settings.json),
+  models (GET/live/refresh/set/auxiliary), providers (GET/delete/self-hosted/
+  quota/cost-history), profile mutations (create/switch/delete/update).
+  Slice 3 = remaining config-FILE writes + auth-bound POST mutations.
 
 ---
 

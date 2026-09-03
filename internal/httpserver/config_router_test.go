@@ -36,7 +36,7 @@ func TestProfileActiveDefault(t *testing.T) {
 	writeHomeFile(t, home, "last_workspace.txt", ws+"\n")
 
 	r := chi.NewRouter()
-	ConfigRouter(r, home)
+	ConfigRouter(r, home, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/api/profile/active", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -74,7 +74,7 @@ func TestProfileActiveNamed(t *testing.T) {
 	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-5\n  provider: openai\n")
 
 	r := chi.NewRouter()
-	ConfigRouter(r, home)
+	ConfigRouter(r, home, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/api/profile/active", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -105,7 +105,7 @@ func TestProfilesList(t *testing.T) {
 
 	// active home = base (default profile)
 	r := chi.NewRouter()
-	ConfigRouter(r, base)
+	ConfigRouter(r, base, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -145,7 +145,7 @@ func TestProfilesListNamedActive(t *testing.T) {
 	writeHomeFile(t, karina, "config.yaml", "model:\n  default: gpt-5\n  provider: openai\n")
 
 	r := chi.NewRouter()
-	ConfigRouter(r, karina)
+	ConfigRouter(r, karina, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -175,7 +175,7 @@ func TestProfilesHiddenProfile(t *testing.T) {
 	writeHomeFile(t, hidden, "profile.yaml", "visible: false\n")
 
 	r := chi.NewRouter()
-	ConfigRouter(r, base)
+	ConfigRouter(r, base, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/api/profiles", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -197,6 +197,189 @@ func TestProfilesHiddenProfile(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"visible":false`) && !strings.Contains(rr.Body.String(), `"visible": false`) {
 		t.Errorf("no visible:false in body")
+	}
+}
+
+func TestSettingsDefaults(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n  provider: custom\n")
+	dataRoot := t.TempDir() // no settings.json
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["theme"] != "dark" {
+		t.Errorf("theme = %v, want dark", out["theme"])
+	}
+	if out["skin"] != "default" {
+		t.Errorf("skin = %v, want default", out["skin"])
+	}
+	if out["send_key"] != "enter" {
+		t.Errorf("send_key = %v, want enter", out["send_key"])
+	}
+	if out["pinned_sessions_limit"] != float64(3) {
+		t.Errorf("pinned_sessions_limit = %v, want 3", out["pinned_sessions_limit"])
+	}
+	if out["default_model"] != "codex" {
+		t.Errorf("default_model = %v, want codex (config.yaml)", out["default_model"])
+	}
+	if out["default_model_provider"] != "custom" {
+		t.Errorf("default_model_provider = %v, want custom", out["default_model_provider"])
+	}
+	if _, has := out["password_hash"]; has {
+		t.Errorf("password_hash leaked")
+	}
+	ps, ok := out["persisted_speech_keys"].([]any)
+	if !ok || len(ps) != 0 {
+		t.Errorf("persisted_speech_keys = %v, want empty", out["persisted_speech_keys"])
+	}
+}
+
+func TestSettingsStoredMerge(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	writeHomeFile(t, dataRoot, "settings.json", `{"theme":"light","send_key":"ctrl+enter","pinned_sessions_limit":5}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["theme"] != "light" {
+		t.Errorf("theme = %v, want light (stored)", out["theme"])
+	}
+	if out["send_key"] != "ctrl+enter" {
+		t.Errorf("send_key = %v, want ctrl+enter", out["send_key"])
+	}
+	if out["pinned_sessions_limit"] != float64(5) {
+		t.Errorf("pinned_sessions_limit = %v, want 5", out["pinned_sessions_limit"])
+	}
+	// default still there
+	if out["skin"] != "default" {
+		t.Errorf("skin = %v, want default", out["skin"])
+	}
+}
+
+func TestSettingsShowCliSessionsGrandfather(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// established install: onboarding_completed true, no show_cli_sessions
+	writeHomeFile(t, dataRoot, "settings.json", `{"onboarding_completed":true,"theme":"dark"}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["show_cli_sessions"] != false {
+		t.Errorf("show_cli_sessions = %v, want false (grandfathered)", out["show_cli_sessions"])
+	}
+}
+
+func TestSettingsShowCliSessionsFresh(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// genuinely new install: only onboarding_completed false
+	writeHomeFile(t, dataRoot, "settings.json", `{"onboarding_completed":false}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["show_cli_sessions"] != true {
+		t.Errorf("show_cli_sessions = %v, want true (fresh install)", out["show_cli_sessions"])
+	}
+}
+
+func TestSettingsVirtualizeTranscriptForceOff(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// stale pre-flip value without optin marker → forced off
+	writeHomeFile(t, dataRoot, "settings.json", `{"virtualize_transcript":true,"onboarding_completed":true}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["virtualize_transcript"] != false {
+		t.Errorf("virtualize_transcript = %v, want false (force-off)", out["virtualize_transcript"])
+	}
+}
+
+func TestSettingsVirtualizeTranscriptOptinHonored(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	// explicit opt-in AFTER the flip → honored True
+	writeHomeFile(t, dataRoot, "settings.json", `{"virtualize_transcript":true,"virtualize_transcript_optin":true,"onboarding_completed":true}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["virtualize_transcript"] != true {
+		t.Errorf("virtualize_transcript = %v, want true (optin)", out["virtualize_transcript"])
+	}
+}
+
+func TestSettingsSpeechKeysPersisted(t *testing.T) {
+	home := t.TempDir()
+	dataRoot := t.TempDir()
+	writeHomeFile(t, dataRoot, "settings.json", `{"tts_engine":"elevenlabs","tts_voice":"amy","theme":"dark"}`)
+
+	r := chi.NewRouter()
+	ConfigRouter(r, home, dataRoot)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ps, ok := out["persisted_speech_keys"].([]any)
+	if !ok || len(ps) != 2 {
+		t.Fatalf("persisted_speech_keys = %v, want [tts_engine tts_voice]", out["persisted_speech_keys"])
+	}
+	if ps[0] != "tts_engine" || ps[1] != "tts_voice" {
+		t.Errorf("persisted_speech_keys = %v, want sorted [tts_engine tts_voice]", ps)
 	}
 }
 
@@ -223,6 +406,7 @@ func TestConfigRouterNativeNoProxyFallback(t *testing.T) {
 	for _, u := range []string{
 		"/api/profile/active",
 		"/api/profiles",
+		"/api/settings",
 	} {
 		resp, err := http.Get(ts.URL + u)
 		if err != nil {
