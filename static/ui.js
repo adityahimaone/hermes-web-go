@@ -7,6 +7,51 @@
 // See api/todo_state.py for the wire contract.
 const S={session:null,messages:[],entries:[],busy:false,pendingFiles:[],toolCalls:[],activeStreamId:null,currentDir:'.',activeProfile:'default',activeProfileIsDefault:true,showHiddenWorkspaceFiles:false,todos:[],todoStateMeta:null,_pendingSessionToolsets:null};
 
+window.__sessionRevHighWater = window.__sessionRevHighWater || {};
+
+function applySessionSnapshot(sessionPayload, sourceLabel) {
+  if (!sessionPayload || !Array.isArray(sessionPayload.messages)) {
+    console.warn('[applySessionSnapshot] rejected: no valid messages array (source=' + sourceLabel + ')');
+    return false;
+  }
+  var sid = sessionPayload.session_id;
+  var incomingRev = typeof sessionPayload.rev === 'number' ? sessionPayload.rev : null;
+  var highWater = window.__sessionRevHighWater[sid] != null ? window.__sessionRevHighWater[sid] : -1;
+  if (incomingRev !== null && incomingRev < highWater) {
+    console.warn('[applySessionSnapshot] rejected STALE snapshot (source=' + sourceLabel + ', incoming rev=' + incomingRev + ', applied rev=' + highWater + ', session=' + sid + ')');
+    return false;
+  }
+  S.messages = sessionPayload.messages;
+  if (incomingRev !== null) window.__sessionRevHighWater[sid] = incomingRev;
+  else {
+    var fallbackLen = Array.isArray(S.messages) ? S.messages.length : 0;
+    if (fallbackLen > highWater) window.__sessionRevHighWater[sid] = fallbackLen;
+  }
+  if (typeof renderMessages === 'function') renderMessages();
+  return true;
+}
+
+function applySessionSnapshotWithCarry(sessionPayload, sourceLabel, carryFn) {
+  if (!sessionPayload || !Array.isArray(sessionPayload.messages)) {
+    console.warn('[applySessionSnapshot] rejected: no valid messages array (source=' + sourceLabel + ')');
+    return false;
+  }
+  var sid = sessionPayload.session_id;
+  var incomingRev = typeof sessionPayload.rev === 'number' ? sessionPayload.rev : null;
+  var highWater = window.__sessionRevHighWater[sid] != null ? window.__sessionRevHighWater[sid] : -1;
+  if (incomingRev !== null && incomingRev < highWater) {
+    console.warn('[applySessionSnapshot] rejected STALE snapshot (source=' + sourceLabel + ', incoming rev=' + incomingRev + ', applied rev=' + highWater + ', session=' + sid + ')');
+    return false;
+  }
+  var nextMessages = sessionPayload.messages;
+  if (typeof carryFn === 'function') {
+    try { nextMessages = carryFn(S.messages || [], sessionPayload.messages || []); } catch (_) { nextMessages = sessionPayload.messages; }
+  }
+  S.messages = nextMessages;
+  if (incomingRev !== null) window.__sessionRevHighWater[sid] = incomingRev;
+  return true;
+}
+
 function assistantDisplayName(){
   if(S.activeProfile&&S.activeProfile!=='default') return S.activeProfile.charAt(0).toUpperCase()+S.activeProfile.slice(1);
   return window._botName||'Hermes';
@@ -491,7 +536,7 @@ async function startCompressionRecovery(btn){
     if(!sid) throw new Error('Compression recovery did not return a session.');
     try{localStorage.setItem('hermes-webui-session',sid);}catch(_){}
     if(typeof loadSession==='function') await loadSession(sid,{preserveActiveInput:false});
-    else if(data.session){S.session=data.session;if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(data.session);S.messages=data.session.messages||[];syncTopbar();renderMessages();}
+    else if(data.session){S.session=data.session;if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(data.session);applySessionSnapshot(data.session,'ui.compression-recovery');syncTopbar();renderMessages();}
     if(typeof renderSessionList==='function') await renderSessionList();
     if(typeof _setActiveSessionUrl==='function') _setActiveSessionUrl(sid);
     if(typeof showToast==='function') showToast((data&&data.message)||'Started focused continuation.',3000,'success');
@@ -10024,7 +10069,7 @@ async function refreshSession() {
     const data = await api(`/api/session?session_id=${encodeURIComponent(S.session.session_id)}`);
     S.session = data.session;
     if(typeof _adoptRegenerationRevision==='function') _adoptRegenerationRevision(data.session);
-    S.messages = data.session.messages || [];
+    if (!applySessionSnapshot(data.session, 'ui.refresh-session')) return;
     _messagesTruncated = !!data.session._messages_truncated;
     _oldestIdx = data.session._messages_offset || 0;
     if (typeof _mergePendingSessionMessage !== 'function') {

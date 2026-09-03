@@ -379,6 +379,7 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 			"pinned":        row.Pinned,
 			"archived":      row.Archived,
 			"project_id":    row.ProjectID,
+			"rev":           row.Rev,
 			"message_count": messageCount(row.Messages),
 			"messages":      json.RawMessage(row.Messages),
 		})
@@ -451,6 +452,7 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 				"pinned":        row.Pinned,
 				"archived":      row.Archived,
 				"project_id":    row.ProjectID,
+				"rev":           row.Rev,
 				"message_count": messageCount(row.Messages),
 				"messages":      json.RawMessage(messages),
 			},
@@ -676,6 +678,7 @@ func sessionResponse(row store.SessionRow) map[string]any {
 		"pinned":        row.Pinned,
 		"archived":      row.Archived,
 		"project_id":    row.ProjectID,
+		"rev":           row.Rev,
 		"message_count": messageCount(row.Messages),
 		"messages":      json.RawMessage(row.Messages),
 	}
@@ -696,6 +699,7 @@ func sessionListItem(row store.SessionRow) map[string]any {
 		"pinned":        row.Pinned,
 		"archived":      row.Archived,
 		"project_id":    row.ProjectID,
+		"rev":           row.Rev,
 		"message_count": messageCount(row.Messages),
 	}
 }

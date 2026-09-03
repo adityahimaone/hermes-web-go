@@ -39,6 +39,10 @@ type SessionRow struct {
 	Pinned    int
 	Archived  int
 	ProjectID string
+	// Rev is a monotonic per-session revision counter, incremented in the same
+	// transaction as every message append. The frontend uses it to refuse
+	// applying a stale session snapshot over a newer, longer visible transcript.
+	Rev int64
 }
 
 // Open opens (or creates) the SQLite database and applies the schema.
@@ -46,7 +50,7 @@ func Open(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +62,27 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// Migrate existing databases that predate the `rev` column. A prior
+	// sessions table (created without rev, or from the legacy importer) must
+	// gain it so every read payload can carry a monotonic marker.
+	if err := migrateRevColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func migrateRevColumn(db *sql.DB) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='rev'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN rev INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const schema = `
@@ -73,7 +97,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   updated_at REAL NOT NULL DEFAULT 0,
   pinned INTEGER NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
-  project_id TEXT
+  project_id TEXT,
+  rev INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 CREATE TABLE IF NOT EXISTS workspaces (path TEXT PRIMARY KEY, name TEXT);
@@ -101,9 +126,9 @@ func ImportSession(db *sql.DB, s SessionImport) error {
 func GetSession(db *sql.DB, id string) (SessionRow, error) {
 	var r SessionRow
 	err := db.QueryRow(`
-		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id
+		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev
 		FROM sessions WHERE session_id = ?`, id).
-		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID)
+		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev)
 	return r, err
 }
 
@@ -116,7 +141,7 @@ func ListSessions(db *sql.DB, limit, offset int) ([]SessionRow, error) {
 		offset = 0
 	}
 	rows, err := db.Query(`
-		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id
+		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev
 		FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -125,7 +150,7 @@ func ListSessions(db *sql.DB, limit, offset int) ([]SessionRow, error) {
 	var out []SessionRow
 	for rows.Next() {
 		var r SessionRow
-		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -205,22 +230,28 @@ func DeleteSession(db *sql.DB, id string) error {
 }
 
 // AppendMessage appends an OpenAI-format message to a session's messages array.
-// The session must already exist. onConflict is irrelevant here; the messages
-// column is read-modify-written under a transaction so concurrent turns on the
-// same session don't clobber each other.
 func AppendMessage(db *sql.DB, id string, msg map[string]any) error {
+	_, err := AppendMessageWithRev(db, id, msg)
+	return err
+}
+
+// AppendMessageWithRev appends a message and returns the new per-session
+// revision. The immediate transaction lock covers the read-modify-write, so
+// concurrent turns on one session cannot overwrite each other's messages.
+func AppendMessageWithRev(db *sql.DB, id string, msg map[string]any) (int64, error) {
 	tx, err := db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
-	row, err := GetSession(db, id)
-	if err != nil {
-		return err
+
+	var raw string
+	if err := tx.QueryRow(`SELECT messages FROM sessions WHERE session_id=?`, id).Scan(&raw); err != nil {
+		return 0, err
 	}
 	var messages []map[string]any
-	if row.Messages != "" {
-		if err := json.Unmarshal([]byte(row.Messages), &messages); err != nil {
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &messages); err != nil {
 			// Corrupt messages column: replace wholesale rather than fail the turn.
 			messages = nil
 		}
@@ -228,10 +259,17 @@ func AppendMessage(db *sql.DB, id string, msg map[string]any) error {
 	messages = append(messages, msg)
 	encoded, err := json.Marshal(messages)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET messages=?, updated_at=? WHERE session_id=?`, string(encoded), time.Now().Unix(), id); err != nil {
-		return err
+	if _, err := tx.Exec(`UPDATE sessions SET messages=?, rev=rev+1, updated_at=? WHERE session_id=?`, string(encoded), time.Now().Unix(), id); err != nil {
+		return 0, err
 	}
-	return tx.Commit()
+	var rev int64
+	if err := tx.QueryRow(`SELECT rev FROM sessions WHERE session_id=?`, id).Scan(&rev); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return rev, nil
 }

@@ -868,7 +868,7 @@ async function _applyManualCompressionResult(data, focusTopic, visibleCount, com
       await loadSession(data.session.session_id);
     }else{
       S.session=data.session;
-      S.messages=data.session.messages||[];
+      applySessionSnapshot(data.session,'commands.reload');
       S.toolCalls=data.session.tool_calls||[];
       clearLiveToolCards();
       try{localStorage.setItem('hermes-webui-session',S.session.session_id);}catch(_){}
@@ -970,7 +970,7 @@ async function _runManualCompression(focusTopic){
         throw new Error('session no longer available');
       }
       S.session=live.session;
-      S.messages=live.session.messages||[];
+      applySessionSnapshot(live.session,'commands.preflight');
       S.toolCalls=live.session.tool_calls||[];
       if(typeof _messagesTruncated!=='undefined') _messagesTruncated=false;
     }catch(preflightErr){
@@ -1752,7 +1752,7 @@ async function cmdRetry(){
     // #5924 SILENT-race guard: a session switch during the GET await must not let
     // this recovery apply session A's intent to whatever session is now visible.
     if(!S.session||S.session.session_id!==activeSid)return;
-    if(data&&data.session){S.messages=data.session.messages||[];S.toolCalls=[];if(typeof clearLiveToolCards==='function')clearLiveToolCards();if(typeof _messagesTruncated!=='undefined')_messagesTruncated=false;renderMessages();}
+    if(data&&data.session){applySessionSnapshot(data.session,'commands.retry-recovery');S.toolCalls=[];if(typeof clearLiveToolCards==='function')clearLiveToolCards();if(typeof _messagesTruncated!=='undefined')_messagesTruncated=false;renderMessages();}
     $('msg').value=r.last_user_text||'';if(typeof autoResize==='function')autoResize();
     // Re-arm the single-shot explicit-pick marker from the captured non-default
     // pick — but only if it's still safe at fire time (session unchanged, current
@@ -1771,7 +1771,7 @@ async function cmdUndo(){
     if(r&&r.error){showToast(r.error);return;}
     if(!S.session||S.session.session_id!==activeSid)return;
     const data=await api('/api/session?session_id='+encodeURIComponent(activeSid));
-    if(data&&data.session){S.messages=data.session.messages||[];S.toolCalls=[];if(typeof clearLiveToolCards==='function')clearLiveToolCards();if(typeof _messagesTruncated!=='undefined')_messagesTruncated=false;renderMessages();}
+    if(data&&data.session){applySessionSnapshot(data.session,'commands.undo');S.toolCalls=[];if(typeof clearLiveToolCards==='function')clearLiveToolCards();if(typeof _messagesTruncated!=='undefined')_messagesTruncated=false;renderMessages();}
     showToast(`↩ ${t('undid_n_messages')} ${r.removed_count} ${t('undid_messages_suffix')}`);
   }catch(e){showToast(t('undo_failed')+e.message);}
 }

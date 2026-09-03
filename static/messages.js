@@ -6189,7 +6189,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           if(!d.session||!Array.isArray(d.session.messages)){
             console.warn('[messages.js] done event missing valid session.messages — keeping existing history');
           } else {
-            S.session=d.session;S.messages=_carryForwardEphemeralTurnFields(S.messages||[], d.session.messages||[]);if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(d.session);if(typeof _messagesTruncated!=='undefined')_messagesTruncated=!!d.session._messages_truncated;
+            S.session=d.session;applySessionSnapshotWithCarry(d.session,'chat.done',_carryForwardEphemeralTurnFields);if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(d.session);if(typeof _messagesTruncated!=='undefined')_messagesTruncated=!!d.session._messages_truncated;
           }
           // #4720: reset _oldestIdx (full-load symmetry; keeps the #4613 anchor aligned).
           if(typeof _oldestIdx!=='undefined')_oldestIdx=d.session._messages_offset||0;
@@ -6631,7 +6631,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
             const _nextMsgs3018=(d.session.messages||[]).filter(m=>m&&m.role);
             if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(d.session);
             _attachProjectedAnchorSceneToLastAssistant(_nextMsgs3018);
-            S.messages=_carryForwardEphemeralTurnFields(S.messages||[], _nextMsgs3018);
+            applySessionSnapshotWithCarry({...d.session, messages: _nextMsgs3018},'chat.recovery',_carryForwardEphemeralTurnFields);
             if(S.session&&S.session.session_id){
               try{localStorage.setItem('hermes-webui-session',S.session.session_id);}catch(_){}
               if(typeof _setActiveSessionUrl==='function') _setActiveSessionUrl(S.session.session_id);
@@ -6872,7 +6872,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         const _nextMsgs3018=(sessionPayload.messages||[]).filter(m=>m&&m.role);
         if(typeof _adoptRegenerationRevision==='function')_adoptRegenerationRevision(sessionPayload);
         _attachProjectedAnchorSceneToLastAssistant(_nextMsgs3018);
-        S.messages=_carryForwardEphemeralTurnFields(S.messages||[], _nextMsgs3018);
+        applySessionSnapshotWithCarry({...sessionPayload, messages: _nextMsgs3018},'chat.stream-end',_carryForwardEphemeralTurnFields);
         if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(S.session);
         clearLiveToolCards();if(!assistantText)removeThinking();
         _markSessionViewed(activeSid, sessionPayload.message_count ?? S.messages.length);
@@ -7036,7 +7036,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         const _resolvedMessages=_preserveCurrentTranscript
           ? [..._stagedMessages,..._currentVisibleMessages.slice(_stagedMessages.length)]
           : _stagedMessages;
-        S.messages=_filterRecoveryControlMessages(_resolvedMessages || []);
+        if (!applySessionSnapshot({...session, messages: _filterRecoveryControlMessages(_resolvedMessages || [])}, 'chat.restore-settled')) return returnStatus?'stale':false;
         _attachProjectedAnchorSceneToLastAssistant(S.messages);
         if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(S.session);
         if(S.session&&S.session.session_id){

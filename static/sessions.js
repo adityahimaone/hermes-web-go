@@ -1505,7 +1505,7 @@ async function newSession(flash, options={}){
     if(consumedExplicitModelOverride&&typeof _clearEmptyComposerModelOverride==='function'){
       _clearEmptyComposerModelOverride();
     }
-    S.session=data.session;if(typeof _adoptRegenerationRevision==='function') _adoptRegenerationRevision(data.session);S.messages=data.session.messages||[];
+    S.session=data.session;if(typeof _adoptRegenerationRevision==='function') _adoptRegenerationRevision(data.session);applySessionSnapshot(data.session,'sessions.new');
     S._pendingSessionToolsets=null;
     if(_sessionSourceFilter==='cli') _sessionSourceFilter='webui';
     if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(S.session);
@@ -3212,7 +3212,7 @@ async function _ensureMessagesLoaded(sid, opts) {
     _pendingCarryForwardSnapshot = null;
   }
   if(typeof clearVisibleMessageRowCache==='function') clearVisibleMessageRowCache();
-  S.messages = msgs;
+  if (!applySessionSnapshot({...data.session, messages: msgs}, 'sessions.load')) return;
   // Expand render window to cover all loaded messages so the next
   // renderMessages() doesn't hide most of them behind a tiny window.
   if(typeof _messageRenderableMessageCount==='function'&&typeof _currentMessageRenderWindowSize==='function'){
@@ -3817,7 +3817,7 @@ async function _loadOlderMessages() {
     if (typeof window._carryForwardEphemeralTurnFields === 'function') {
       nextMessages = window._carryForwardEphemeralTurnFields(S.messages || [], nextMessages);
     }
-    S.messages = nextMessages;
+    if (!applySessionSnapshot({...responseSession, messages: nextMessages}, 'sessions.pagination')) return;
     _syncToolCallsForLoadedMessages(nextMessages, responseSession.tool_calls);
     // renderMessages() windows long transcripts from the end. If we do not
     // expand that window before rendering, the newly prepended page stays
@@ -3923,7 +3923,7 @@ async function _ensureAllMessagesLoaded() {
     if (typeof window._carryForwardEphemeralTurnFields === 'function') {
       _msgsToAssign = window._carryForwardEphemeralTurnFields(S.messages || [], msgs);
     }
-    S.messages = _msgsToAssign;
+    if (!applySessionSnapshot({...data.session, messages: _msgsToAssign}, 'sessions.refresh')) return;
     _messagesTruncated = false;
     _oldestIdx = 0;
     _syncToolCallsForLoadedMessages(msgs, data.session.tool_calls);
@@ -6375,7 +6375,7 @@ function startGatewaySSE(){
                     if (typeof window._carryForwardEphemeralTurnFields === 'function') {
                       _nextToAssign = window._carryForwardEphemeralTurnFields(S.messages || [], next);
                     }
-                    S.messages = _nextToAssign;
+                    if (!applySessionSnapshot({...res.session, messages: _nextToAssign}, 'sessions.stream-refresh')) return;
                     if(S.session && S.session.session_id === activeSid){
                       S.session.message_count = next.length;
                       const newest = next.length ? next[next.length - 1] : null;

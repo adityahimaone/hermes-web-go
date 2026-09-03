@@ -117,7 +117,7 @@ function _jumpToMessage(rawIdx) {
     .then(function(data) {
       if (!data || !data.session) return;
       if (!S.session || S.session.session_id !== sid) return;  // session switched
-      S.messages = data.session.messages || [];                // populate S
+      applySessionSnapshot(data.session, 'outline.refresh');   // populate S
       _expandOutlineRenderWindow();
       if (typeof renderMessages === 'function') renderMessages({ preserveScroll: true });
       window.setTimeout(function() {

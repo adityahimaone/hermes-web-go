@@ -124,6 +124,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 						"pinned":        row.Pinned,
 						"archived":      row.Archived,
 						"project_id":    row.ProjectID,
+						"rev":           row.Rev,
 						"message_count": len(messages),
 						"messages":      messages,
 					}}
