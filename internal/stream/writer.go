@@ -14,7 +14,7 @@ const SSEHeartbeatInterval = 30 * time.Second
 
 func eventJSON(ev agentclient.TurnEvent) []byte {
 	switch ev.Type {
-	case agentclient.EventToken:
+	case agentclient.EventToken, agentclient.EventReasoning:
 		b, _ := json.Marshal(map[string]string{"text": ev.Text})
 		return b
 	case agentclient.EventTool:

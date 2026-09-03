@@ -110,7 +110,57 @@ All httpserver tests: PASS (1.759s)
 
 ---
 
-## 3. SSE Event Format Reference
+## 3. Live Trace: Session `0733f8d8ac96` (2026-09-03)
+
+### User symptom
+
+After restart, chat can persist correctly. During a new turn, the browser sometimes shows no Hermes Thinking bubble; sending another message makes the previous answer appear. Browser automation was attempted, but macOS Accessibility/Screen Recording permissions blocked CuaDriver. Backend and SSE were traced directly with the same browser endpoints.
+
+### Evidence
+
+```text
+GET /api/session?session_id=0733f8d8ac96 -> 200
+messages before test: 10 (user, assistant pairs)
+POST /api/chat/start -> stream_id 888c30d7eff3
+GET /api/chat/stream?stream_id=888c30d7eff3 -> token/tool/done frames
+messages in done.session: 12 (user, assistant pairs)
+```
+
+Backend persisted full history. `done` contained the complete session snapshot, so this trace ruled out the earlier DB persistence and empty-done-payload bugs for this turn.
+
+### Root cause found: reasoning event parity gap
+
+Python normalizes gateway `reasoning.available` and internal `_thinking` progress to SSE event `reasoning` (`api/gateway_chat.py:493-505`). Frontend listens for `reasoning` at `static/messages.js:5826-5847` and renders the live Thinking card.
+
+Go `translateGatewayEvent` had no `reasoning` / `reasoning.available` cases. It returned `false` from the default branch, dropping the event before `chat.go` and the SSE writer. Therefore:
+
+```text
+gateway reasoning -> Go parser drops -> no browser reasoning event -> no Thinking bubble
+```
+
+### Fix applied, not yet pushed
+
+- Add `agentclient.EventReasoning`.
+- Parse `reasoning`, `reasoning.available`, with `text` / `delta` / `content` fallback.
+- Serialize `reasoning` as `event: reasoning` with `{text}` payload.
+- Relay and persist reasoning alongside assistant answer.
+- Add parser regression coverage.
+
+Fresh gates passed after fix:
+
+```text
+go test ./... -race        PASS
+go vet ./...               PASS
+go build ./cmd/server      PASS
+node --check static/messages.js PASS
+git diff --check           PASS
+```
+
+Browser automation status: blocked by macOS permission gate, not app behavior. Manual browser check still needed after granting Accessibility + Screen Recording, then rebuild/restart latest binary.
+
+---
+
+## 4. SSE Event Format Reference
 
 ### 3.1 Token Delta
 ```

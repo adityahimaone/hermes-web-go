@@ -83,6 +83,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 			defer cancel()
 			defer reg.Close(streamID)
 			var answer strings.Builder
+			var reasoning strings.Builder
 			doneEmitted := false
 
 			// finishTurn is idempotent: it persists whatever assistant text
@@ -95,8 +96,11 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 					return
 				}
 				doneEmitted = true
-				if answer.Len() > 0 {
+				if answer.Len() > 0 || reasoning.Len() > 0 {
 					m := map[string]any{"role": "assistant", "content": answer.String()}
+					if reasoning.Len() > 0 {
+						m["reasoning"] = reasoning.String()
+					}
 					if status != "" {
 						m["status"] = status
 					}
@@ -153,9 +157,11 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.Registry, client agentclie
 						finishTurn("")
 						return
 					}
-					// accumulate token text before forwarding
+					// accumulate token/reasoning text before forwarding
 					if ev.Type == agentclient.EventToken {
 						answer.WriteString(ev.Text)
+					} else if ev.Type == agentclient.EventReasoning {
+						reasoning.WriteString(ev.Text)
 					}
 					// §5.1: run.completed is informational only — done is the
 					// single completion signal. Swallow it so the frontend

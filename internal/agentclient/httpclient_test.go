@@ -141,3 +141,32 @@ func TestReadEvents_ParsesEventTypeFromJSONPayload(t *testing.T) {
 		t.Errorf("event 2: want done, got %+v", got[2])
 	}
 }
+
+func TestTranslateGatewayReasoning(t *testing.T) {
+	cases := []struct {
+		name string
+		evt  string
+		pay  map[string]any
+		want string
+	}{
+		{"plain", "reasoning", map[string]any{"text": "think"}, "think"},
+		{"avail text", "reasoning.available", map[string]any{"text": "think2"}, "think2"},
+		{"delta fallback", "reasoning.available", map[string]any{"delta": "think3"}, "think3"},
+		{"content fallback", "reasoning", map[string]any{"content": "think4"}, "think4"},
+		{"empty dropped", "reasoning", map[string]any{"text": ""}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ev, ok := translateGatewayEvent(c.evt, c.pay)
+			if c.want == "" {
+				if ok {
+					t.Fatalf("expected dropped, got %+v", ev)
+				}
+				return
+			}
+			if !ok || ev.Type != EventReasoning || ev.Text != c.want {
+				t.Fatalf("got %+v ok=%v want %q", ev, ok, c.want)
+			}
+		})
+	}
+}

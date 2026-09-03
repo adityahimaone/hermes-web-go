@@ -152,6 +152,15 @@ func translateGatewayEvent(eventType string, payload map[string]any) (TurnEvent,
 	case "token":
 		text, _ := payload["text"].(string)
 		return TurnEvent{Type: EventToken, Text: text, Data: payload}, true
+	case "reasoning", "reasoning.available":
+		text, _ := payload["text"].(string)
+		if text == "" {
+			text, _ = payload["delta"].(string)
+		}
+		if text == "" {
+			text, _ = payload["content"].(string)
+		}
+		return TurnEvent{Type: EventReasoning, Text: text, Data: payload}, text != ""
 	case "run.completed":
 		// Informational only; `done` is the single completion signal.
 		return TurnEvent{}, false

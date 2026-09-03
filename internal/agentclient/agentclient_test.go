@@ -19,6 +19,13 @@ func TestTurnEventJSONShape(t *testing.T) {
 	}
 }
 
+func TestTranslateGatewayReasoningEvent(t *testing.T) {
+	event, ok := translateGatewayEvent("reasoning", map[string]any{"text": "thinking"})
+	if !ok || event.Type != EventReasoning || event.Text != "thinking" {
+		t.Fatalf("event = %+v, ok = %v", event, ok)
+	}
+}
+
 func TestAgentClientInterfaceCompiles(t *testing.T) {
 	var _ AgentClient = (*testClient)(nil)
 }

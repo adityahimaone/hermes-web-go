@@ -12,11 +12,12 @@ import "context"
 type EventType string
 
 const (
-	EventToken    EventType = "token"
-	EventTool     EventType = "tool"
-	EventApproval EventType = "approval"
-	EventDone     EventType = "done"
-	EventError    EventType = "error"
+	EventToken     EventType = "token"
+	EventReasoning EventType = "reasoning"
+	EventTool      EventType = "tool"
+	EventApproval  EventType = "approval"
+	EventDone      EventType = "done"
+	EventError     EventType = "error"
 )
 
 // TurnRequest is the per-turn execution contract. TaskID (not SessionID) is
