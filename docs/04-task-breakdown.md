@@ -107,6 +107,11 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       event streams. Evidence: `TestChatConcurrentSessionsNoCrossContamination` under `-race`.
 - [x] `GET /api/chat/stream/status` — reconnect-banner support. Evidence: `TestChatStartStreamsTokenAndDone`
       confirms inactive status after completed stream; commit `ec72c10`.
+- [x] Journaled SSE fan-out/replay. `internal/stream` now provides bounded retention,
+      monotonic sequence IDs, multi-subscriber broadcast, terminal replay, and
+      `Last-Event-ID`/`after_seq` resume. Evidence: `TestJournalBroadcastsAndReplaysInSequence`,
+      `TestJournalFanoutAndTerminalReplay`, `TestJournalRetentionBoundsReplay`,
+      `TestChatStreamFanout`, and `TestChatStreamReplay`; commit `c2fd504`.
 - [x] Session/history completion: `done` carries full session snapshot and `chat_api_parity.md`
       §§2–3 history loss + done wipe are fixed; `finishTurn` guarantees exactly-one done and
       persists whatever tokens accumulated on every exit path. Evidence:
