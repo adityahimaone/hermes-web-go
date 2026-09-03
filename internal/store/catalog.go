@@ -39,6 +39,38 @@ func ImportProject(db *sql.DB, p ProjectImport) error {
 	return err
 }
 
+// ProjectRow is a read-model project surfaced to handlers.
+type ProjectRow struct {
+	ID    string
+	Name  string
+	Color string
+}
+
+// ListProjects returns all project rows ordered by id.
+func ListProjects(db *sql.DB) ([]ProjectRow, error) {
+	rows, err := db.Query(`SELECT id, name, color FROM projects ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProjectRow
+	for rows.Next() {
+		var r ProjectRow
+		if err := rows.Scan(&r.ID, &r.Name, &r.Color); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ProjectExists reports whether a project id is present.
+func ProjectExists(db *sql.DB, id string) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM projects WHERE id=?`, id).Scan(&n)
+	return n > 0, err
+}
+
 // WorkspaceRow is a read-model workspace surfaced to handlers.
 type WorkspaceRow struct {
 	Path string

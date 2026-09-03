@@ -96,6 +96,22 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       Python. Evidence: `TestNativeWorkspacesFromDB` (last + flag shape).
 - [x] Remove proxy fallback for these routes once green; registry marks all Phase 3 routes native.
       Verification: `go test ./...`, `go test ./... -race`, and `go vet ./...` pass (2026-09-02).
+- [x] **Family-1 session lifecycle parity (2026-09-03):** native in Go —
+      `/api/session/status` (Python `session_status()` exact shape: no rev/messages/
+      pinned leak, title strip, `agent_running` from registry liveness), `/api/session/usage`
+      (token counters zeroed — importer carries no token fields yet), `/api/session/pin`
+      (quota 3 mirroring `pinned_sessions_limit` default; 400 on exceed), `/api/session/archive`
+      (default true, no `updated_at` touch), `/api/session/move` (project existence check;
+      empty string unassigns), `/api/session/toolsets` (non-empty list of non-empty strings
+      or null — mirrors `_validate_session_toolsets_shape`), `/api/session/draft`
+      (GET/POST, 50k text + 50 files caps, `unchanged` flag, no `updated_at` touch),
+      `/api/session/truncate` (negative/non-integer `keep_count` → 400, rev bump,
+      `compact|messages` response), `/api/session/clear` (truncate-0 + title reset to
+      `Untitled`, compact response). Schema gained `enabled_toolsets` + `composer_draft`
+      columns with migration; importer (`copySessionJSON`) carries both.
+      **Deferred:** `/api/session/duplicate` + `/api/sessions/cleanup` (see progress-log —
+      needs fields the projection lacks / filesystem reconciliation).
+      Evidence: `TestSessionFamilyHandlers` (17 subtests), `TestSessionFamilyNativeNoProxyFallback`.
 
 ## Phase 4 — Chat + streaming
 

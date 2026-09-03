@@ -5,6 +5,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,10 @@ type SessionImport struct {
 	Pinned    int
 	Archived  int
 	ProjectID string
+	// EnabledToolsets is the raw JSON array of the per-session toolset override.
+	EnabledToolsets string
+	// ComposerDraft is the raw JSON object of the per-session composer draft.
+	ComposerDraft string
 }
 
 // SessionRow is a read-model session surfaced to handlers.
@@ -43,6 +48,10 @@ type SessionRow struct {
 	// transaction as every message append. The frontend uses it to refuse
 	// applying a stale session snapshot over a newer, longer visible transcript.
 	Rev int64
+	// EnabledToolsets is the per-session toolset override (JSON array or "").
+	EnabledToolsets string
+	// ComposerDraft is the per-session composer draft (JSON object or "").
+	ComposerDraft string
 }
 
 // Open opens (or creates) the SQLite database and applies the schema.
@@ -62,10 +71,15 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	// Migrate existing databases that predate the `rev` column. A prior
-	// sessions table (created without rev, or from the legacy importer) must
-	// gain it so every read payload can carry a monotonic marker.
+	// Migrate existing databases that predate the `rev`, `enabled_toolsets`,
+	// and `composer_draft` columns. A prior sessions table (created without
+	// them, or from the legacy importer) must gain them so reads and mutations
+	// carry the full projection.
 	if err := migrateRevColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrateSessionColumns(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -85,6 +99,23 @@ func migrateRevColumn(db *sql.DB) error {
 	return nil
 }
 
+// migrateSessionColumns adds the Family-1 projection columns (toolset override
+// and composer draft) to databases that predate them.
+func migrateSessionColumns(db *sql.DB) error {
+	for _, col := range []string{"enabled_toolsets", "composer_draft"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='` + col + `'`).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
@@ -98,7 +129,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   pinned INTEGER NOT NULL DEFAULT 0,
   archived INTEGER NOT NULL DEFAULT 0,
   project_id TEXT,
-  rev INTEGER NOT NULL DEFAULT 0
+  rev INTEGER NOT NULL DEFAULT 0,
+  enabled_toolsets TEXT NOT NULL DEFAULT '',
+  composer_draft TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 CREATE TABLE IF NOT EXISTS workspaces (path TEXT PRIMARY KEY, name TEXT);
@@ -109,14 +142,16 @@ CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, color TEXT)
 // ImportSession inserts a JSON session into sqlite, tolerating empty optional fields.
 func ImportSession(db *sql.DB, s SessionImport) error {
 	if _, err := db.Exec(`
-		INSERT INTO sessions (session_id, title, workspace, model, messages, tool_calls, created_at, updated_at, pinned, archived, project_id)
-		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)
+		INSERT INTO sessions (session_id, title, workspace, model, messages, tool_calls, created_at, updated_at, pinned, archived, project_id, enabled_toolsets, composer_draft)
+		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			title=excluded.title, workspace=excluded.workspace, model=excluded.model,
 			messages=excluded.messages, updated_at=excluded.updated_at,
-			pinned=excluded.pinned, archived=excluded.archived, project_id=excluded.project_id
+			pinned=excluded.pinned, archived=excluded.archived, project_id=excluded.project_id,
+			enabled_toolsets=excluded.enabled_toolsets, composer_draft=excluded.composer_draft
 	`, s.ID, s.Title, s.Workspace, s.Model, s.Messages,
-		parseTime(s.CreatedAt), parseTime(s.UpdatedAt), s.Pinned, s.Archived, s.ProjectID); err != nil {
+		parseTime(s.CreatedAt), parseTime(s.UpdatedAt), s.Pinned, s.Archived, s.ProjectID,
+		s.EnabledToolsets, s.ComposerDraft); err != nil {
 		return err
 	}
 	return nil
@@ -126,9 +161,9 @@ func ImportSession(db *sql.DB, s SessionImport) error {
 func GetSession(db *sql.DB, id string) (SessionRow, error) {
 	var r SessionRow
 	err := db.QueryRow(`
-		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev
+		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev, enabled_toolsets, composer_draft
 		FROM sessions WHERE session_id = ?`, id).
-		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev)
+		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft)
 	return r, err
 }
 
@@ -141,7 +176,7 @@ func ListSessions(db *sql.DB, limit, offset int) ([]SessionRow, error) {
 		offset = 0
 	}
 	rows, err := db.Query(`
-		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev
+		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev, enabled_toolsets, composer_draft
 		FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -150,7 +185,7 @@ func ListSessions(db *sql.DB, limit, offset int) ([]SessionRow, error) {
 	var out []SessionRow
 	for rows.Next() {
 		var r SessionRow
-		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -192,6 +227,90 @@ type SessionUpdate struct {
 	Pinned    *int
 	Archived  *int
 	ProjectID *string
+}
+
+// SetSessionToolsets persists the per-session enabled-toolsets override as a
+// JSON array (or SQL NULL when clearing the override).
+func SetSessionToolsets(db *sql.DB, id string, raw []byte) error {
+	if raw != nil {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+	}
+	_, err := db.Exec(`UPDATE sessions SET enabled_toolsets=? WHERE session_id=?`, string(raw), id)
+	return err
+}
+
+// SetSessionDraft persists the composer draft object. Pass nil to clear.
+func SetSessionDraft(db *sql.DB, id string, draft []byte) error {
+	if draft != nil {
+		var v any
+		if err := json.Unmarshal(draft, &v); err != nil {
+			return err
+		}
+	}
+	_, err := db.Exec(`UPDATE sessions SET composer_draft=? WHERE session_id=?`, string(draft), id)
+	return err
+}
+
+// SetSessionProject assigns a session to a project_id (move).
+func SetSessionProject(db *sql.DB, id, projectID string) error {
+	_, err := db.Exec(`UPDATE sessions SET project_id=? WHERE session_id=?`, projectID, id)
+	return err
+}
+
+// SetSessionFlag updates a single pinned/archived boolean column from an int.
+// column must be one of the two whitelisted names; anything else is rejected.
+func SetSessionFlag(db *sql.DB, id, column string, v int) error {
+	if column != "pinned" && column != "archived" {
+		return errors.New("invalid session flag column")
+	}
+	_, err := db.Exec(`UPDATE sessions SET `+column+`=? WHERE session_id=?`, v, id)
+	return err
+}
+
+// TruncateMessages replaces messages with the first keep entries and bumps
+// rev. Negative keep is rejected by the handler; here it truncates to zero.
+func TruncateMessages(db *sql.DB, id string, keep int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var raw string
+	if err := tx.QueryRow(`SELECT messages FROM sessions WHERE session_id=?`, id).Scan(&raw); err != nil {
+		return err
+	}
+	var messages []map[string]any
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &messages)
+	}
+	if keep < len(messages) {
+		messages = messages[:keep]
+	}
+	enc, err := json.Marshal(messages)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET messages=?, rev=rev+1, updated_at=? WHERE session_id=?`, string(enc), time.Now().Unix(), id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearSession empties messages and resets the title to Untitled, mirroring
+// Python's /clear (truncate-to-zero plus title reset via the rename helper).
+func ClearSession(db *sql.DB, id string) error {
+	_, err := db.Exec(`UPDATE sessions SET messages='[]', title='Untitled', rev=rev+1, updated_at=? WHERE session_id=?`, time.Now().Unix(), id)
+	return err
+}
+
+// CountPinnedSessions returns how many sessions are currently pinned.
+func CountPinnedSessions(db *sql.DB) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE pinned=1`).Scan(&n)
+	return n, err
 }
 
 // CreateSession inserts a new session row. Workspace and title default to empty.

@@ -95,6 +95,57 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 
 ---
 
+## Family-1 session lifecycle native (2026-09-03, fourth pass)
+
+## What was done
+- Added `internal/httpserver/session_family.go` with 9 native routes (Family-1
+  slice of the session-lifecycle family): `/api/session/status`, `/usage`,
+  `/pin`, `/archive`, `/move`, `/toolsets`, `/draft` (GET/POST), `/truncate`,
+  `/clear` — all pure DB projections over the SQLite store.
+- `/status` matches Python `session_status()` exactly: no `rev`/`messages`/
+  `pinned` leak, title strip, `agent_running` from stream-registry liveness
+  (global signal; Python's per-session via `active_stream_id` — Go store has no
+  stream column yet, documented limitation). `/usage` zeroes token counters
+  (importer carries no token fields).
+- `/pin` enforces quota 3 (`pinned_sessions_limit` default mirror), 400 on
+  exceed; `/move` checks project existence (404 unknown), empty string
+  unassigns; `/toolsets` requires non-empty list of non-empty strings or null
+  (mirrors `_validate_session_toolsets_shape`); `/draft` caps 50k text + 50
+  files, returns `unchanged: true` on no-op, never touches `updated_at`
+  (mirrors `save(touch_updated_at=False)`); `/truncate` guards negative /
+  non-integer `keep_count` (400), bumps `rev`, returns `compact|messages`;
+  `/clear` truncates to zero + resets title to `Untitled` (mirrors #3542), returns compact.
+- Schema: `enabled_toolsets` + `composer_draft` columns (default `''`) +
+  `migrateSessionColumns` for existing DBs; `copySessionJSON` importer carries
+  both fields.
+- Registered all 9 native in `internal/proxy/registry.go` (`NativeMethods`
+  method-aware — draft is GET+POST) so proxy fallback never sees them.
+- `.gitignore` += `/hermes-web-go` (stray build binary).
+
+## Verification evidence (fresh, this run)
+- `go build ./...` — PASS
+- `go test ./...` — PASS (all packages)
+- `go test -race ./...` — PASS
+- `go vet ./...` — PASS
+- `git diff --check` — PASS
+- New regressions: `session_family_test.go` — `TestSessionFamilyHandlers`
+  (17 subtests: status shape, pin quota, toolsets validation incl empty/blank,
+  draft caps, truncate negative, clear, move unknown project, agent_running
+  liveness), `TestSessionFamilyNativeNoProxyFallback`.
+
+## Deferred (documented in code + 04-task-breakdown)
+- `/api/session/duplicate`: Python copies tokens/personality/toolsets +
+  continuation semantics; Go projection lacks those fields — exact parity
+  impossible until importer learns them.
+- `/api/sessions/cleanup`: filesystem sweep of Untitled/empty session files,
+  not a DB projection — needs importer-aware file reconciliation.
+
+## Next step
+- Frontend verification against the new response shapes; remaining
+  session-lifecycle family items (duplicate/cleanup) after importer enrichment.
+
+---
+
 ## Phase 6 — skills/memory writes native (2026-09-03, third pass)
 
 ## What was done

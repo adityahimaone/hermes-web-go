@@ -169,6 +169,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	r.Get("/health", NewHealth(reg, time.Now()).WithDB(db).ServeHTTP)
 	if db != nil {
 		DataRouter(r, db, dataRoot)
+		SessionFamilyRouter(r, db, reg)
 	}
 	ChatRouter(r, db, reg, client, st)
 	if st != nil {
@@ -204,6 +205,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	// Phase 2 read-only data routes are native when the DB is present.
 	if db != nil {
 		DataRouter(r, db, dataRoot)
+		SessionFamilyRouter(r, db, reg)
 	}
 
 	CronsRouter(r, routerHermesHome(o), o.cron)

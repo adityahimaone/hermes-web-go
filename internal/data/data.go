@@ -99,6 +99,18 @@ func copySessionJSON(s *store.SessionImport, raw map[string]json.RawMessage) {
 	} else {
 		s.Messages = "[]"
 	}
+	// Family-1 fields: embed the raw JSON (or defaults) so the projection
+	// columns stay populated for /draft, /toolsets, /status consumers.
+	if r := raw["enabled_toolsets"]; r != nil {
+		s.EnabledToolsets = string(r)
+	} else {
+		s.EnabledToolsets = ""
+	}
+	if r := raw["composer_draft"]; r != nil {
+		s.ComposerDraft = string(r)
+	} else {
+		s.ComposerDraft = ""
+	}
 }
 
 // ImportSessions imports every *.json session file under a directory into DB,
