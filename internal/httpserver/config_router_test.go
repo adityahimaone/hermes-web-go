@@ -1235,3 +1235,113 @@ func TestProvidersSelfHostedMissingBaseURL(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
+
+// ── quota / cost-history ──────────────────────────────────────────────────
+
+func TestProviderQuotaNoActiveProvider(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: codex\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/quota", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["ok"] != false || resp["status"] != "unavailable" {
+		t.Errorf("resp = %v, want unavailable", resp)
+	}
+}
+
+func TestProviderQuotaNoKey(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-4o\n  provider: openai\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/quota?provider=openrouter", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["status"] != "no_key" {
+		t.Errorf("status = %v, want no_key", resp["status"])
+	}
+}
+
+func TestProviderQuotaUnsupportedProvider(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, ".env", "OPENAI_API_KEY=sk-openai-12345678\n")
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/quota?provider=openai", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["supported"] != false || resp["status"] != "unsupported" {
+		t.Errorf("resp = %v, want unsupported", resp)
+	}
+}
+
+func TestProviderQuotaAccountUsageGap(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/quota?provider=openai-codex", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["supported"] != true || resp["status"] != "unavailable" {
+		t.Errorf("resp = %v, want documented gap unavailable", resp)
+	}
+}
+
+func TestProviderCostHistoryMissingProvider(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/cost-history", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["status"] != "missing_provider" {
+		t.Errorf("status = %v, want missing_provider", resp["status"])
+	}
+}
+
+func TestProviderCostHistoryNoKey(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/cost-history?provider=openrouter", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["status"] != "no_key" {
+		t.Errorf("status = %v, want no_key", resp["status"])
+	}
+}
+
+func TestProviderCostHistoryUnsupported(t *testing.T) {
+	home := t.TempDir()
+	rr := auxRequest(t, home, http.MethodGet, "/api/provider/cost-history?provider=anthropic", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if resp["supported"] != false || resp["status"] != "unsupported" {
+		t.Errorf("resp = %v, want unsupported", resp)
+	}
+}

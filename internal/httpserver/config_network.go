@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -694,4 +695,350 @@ func truthy(v any) bool {
 		}
 	}
 	return false
+}
+
+// ── /api/provider/quota ────────────────────────────────────────────────────
+// Shape parity with api/providers.py get_provider_quota(). OpenRouter uses a
+// pure-HTTP /auth/key fetch (ported); account-usage providers (openai-codex,
+// anthropic) rely on hermes_cli's /usage abstraction — NOT ported, they
+// return the documented "unavailable" gap response.
+
+const openRouterKeyURL = "https://openrouter.ai/api/v1/key"
+
+var accountUsageProviders = map[string]bool{"openai-codex": true, "anthropic": true}
+
+func providerQuota(home, providerID string, refresh bool) map[string]any {
+	provider := strings.ToLower(strings.TrimSpace(providerID))
+	if provider == "" {
+		mc := configModelSection(home)
+		provider = strings.ToLower(strings.TrimSpace(strval(mc["provider"])))
+	}
+	if provider == "" {
+		return map[string]any{
+			"ok": false, "provider": nil, "display_name": nil,
+			"supported": false, "status": "unavailable", "quota": nil,
+			"message": "No active provider is configured.",
+		}
+	}
+	displayName := providerDisplayName(provider)
+	if accountUsageProviders[provider] {
+		// hermes_cli /usage account-limits abstraction — not available in Go.
+		return map[string]any{
+			"ok": false, "provider": provider, "display_name": displayName,
+			"supported": true, "status": "unavailable", "quota": nil,
+			"message": "Account usage status for this provider is not available in the Go build. Use the Python WebUI or CLI.",
+		}
+	}
+	if provider != "openrouter" {
+		return map[string]any{
+			"ok": false, "provider": provider, "display_name": displayName,
+			"supported": false, "status": "unsupported", "quota": nil,
+			"message": "Quota status is not available for " + displayName + ".",
+		}
+	}
+	apiKey := providerKeyFromEnv(home, "openrouter")
+	if apiKey == "" {
+		return map[string]any{
+			"ok": false, "provider": "openrouter", "display_name": displayName,
+			"supported": true, "status": "no_key", "quota": nil,
+			"message": "OpenRouter quota status needs an OPENROUTER_API_KEY configured on the server.",
+		}
+	}
+	if !refresh {
+		if cached := cachedProviderQuota(); cached != nil {
+			return cached
+		}
+	}
+	quota, label, err := fetchOpenRouterKey(apiKey)
+	if err != nil {
+		status := "unavailable"
+		if err == errInvalidKey {
+			status = "invalid_key"
+		}
+		return map[string]any{
+			"ok": false, "provider": "openrouter", "display_name": displayName,
+			"supported": true, "status": status, "quota": nil,
+			"message": quotaStatusMessage(status),
+		}
+	}
+	resp := map[string]any{
+		"ok": true, "provider": "openrouter", "display_name": displayName,
+		"supported": true, "status": "available",
+		"label": "OpenRouter credits",
+		"quota": quota, "message": "OpenRouter quota status loaded.",
+	}
+	if label != "" {
+		resp["label"] = label
+	}
+	setProviderQuotaCache(resp)
+	return resp
+}
+
+var errInvalidKey = fmt.Errorf("invalid key")
+
+func fetchOpenRouterKey(apiKey string) (map[string]any, string, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, openRouterKeyURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, "", errInvalidKey
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, "", err
+	}
+	data, _ := parsed["data"].(map[string]any)
+	if data == nil {
+		data = parsed
+	}
+	quota := map[string]any{
+		"limit_remaining": quotaNumber(data["limit_remaining"]),
+		"usage":           quotaNumber(data["usage"]),
+		"limit":           quotaNumber(data["limit"]),
+	}
+	label := strings.TrimSpace(strval(data["label"]))
+	return quota, label, nil
+}
+
+func quotaNumber(v any) any {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case float64:
+		return t
+	case int:
+		return float64(t)
+	case json.Number:
+		f, err := t.Float64()
+		if err != nil {
+			return nil
+		}
+		return f
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		if err != nil {
+			return nil
+		}
+		return f
+	default:
+		return nil
+	}
+}
+
+func quotaStatusMessage(status string) string {
+	switch status {
+	case "invalid_key":
+		return "OpenRouter rejected the configured API key."
+	default:
+		return "OpenRouter quota status is temporarily unavailable."
+	}
+}
+
+func cachedProviderQuota() map[string]any {
+	modelsCacheMu.Lock()
+	defer modelsCacheMu.Unlock()
+	e, ok := modelsCache["quota:openrouter"]
+	if !ok || !time.Now().Before(e.expiresAt) {
+		return nil
+	}
+	return e.payload.(map[string]any)
+}
+
+func setProviderQuotaCache(resp map[string]any) {
+	modelsCacheMu.Lock()
+	modelsCache["quota:openrouter"] = modelsCacheEntry{payload: resp, expiresAt: time.Now().Add(60 * time.Second)}
+	modelsCacheMu.Unlock()
+}
+
+// ── /api/provider/cost-history ─────────────────────────────────────────────
+// Full port of api/providers.py get_provider_cost_history() — openrouter-only.
+// Snapshots persisted to <home>/cost-snapshots/openrouter.json (same layout as
+// Python: {"provider","snapshots":[{"date","used","limit"}]}).
+
+const costSnapshotMaxDays = 365
+
+func providerCostHistory(home, providerID string, days int) map[string]any {
+	provider := strings.ToLower(strings.TrimSpace(providerID))
+	if provider == "" {
+		return map[string]any{
+			"ok": false, "provider": nil,
+			"status":  "missing_provider",
+			"message": "Provider parameter is required.  Use ?provider=openrouter",
+		}
+	}
+	displayName := providerDisplayName(provider)
+	if provider != "openrouter" {
+		return map[string]any{
+			"ok": false, "provider": provider, "display_name": displayName,
+			"supported": false, "status": "unsupported",
+			"message": "Cost history is not available for " + displayName + ". Only openrouter is supported in this release.",
+		}
+	}
+	monthlyBudget := providerCostBudget(home)
+	apiKey := providerKeyFromEnv(home, "openrouter")
+	if apiKey == "" {
+		return map[string]any{
+			"ok": false, "provider": "openrouter", "display_name": displayName,
+			"supported": true, "status": "no_key", "monthly_budget": monthlyBudget,
+			"message": "OpenRouter cost history needs an OPENROUTER_API_KEY configured on the server.",
+		}
+	}
+	keyInfo, _, keyErr := fetchOpenRouterKey(apiKey)
+	var snapshots []map[string]any
+	if keyErr != nil {
+		snapshots = readCostSnapshots(home)
+		return map[string]any{
+			"ok": false, "provider": "openrouter", "display_name": displayName,
+			"supported": true, "status": "unavailable", "window_days": days,
+			"snapshots": computeDeltas(snapshots, days),
+			"limit":     nil, "label": nil, "monthly_budget": monthlyBudget,
+			"message": "OpenRouter cost history is temporarily unavailable. Showing last known data.",
+		}
+	}
+	snapshots = appendCostSnapshot(home, quotaNumber(keyInfo["usage"]), quotaNumber(keyInfo["limit"]))
+	deltas := computeDeltas(snapshots, days)
+	resp := map[string]any{
+		"ok": true, "provider": "openrouter", "display_name": displayName,
+		"supported": true, "status": "available", "window_days": days,
+		"snapshots": deltas,
+		"limit":     keyInfo["limit"], "monthly_budget": monthlyBudget,
+		"message": "OpenRouter cost history loaded.",
+	}
+	if l, ok := keyInfo["label"].(string); ok && l != "" {
+		resp["label"] = l
+	} else {
+		resp["label"] = "OpenRouter credits"
+	}
+	return resp
+}
+
+func providerCostBudget(home string) any {
+	raw, err := os.ReadFile(filepath.Join(home, "settings.json"))
+	if err != nil {
+		return nil
+	}
+	var s map[string]any
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil
+	}
+	return quotaNumber(s["provider_cost_budget"])
+}
+
+func costSnapshotsPath(home string) string {
+	return filepath.Join(home, "cost-snapshots", "openrouter.json")
+}
+
+func readCostSnapshots(home string) []map[string]any {
+	data, err := os.ReadFile(costSnapshotsPath(home))
+	if err != nil {
+		return nil
+	}
+	var payload struct {
+		Snapshots []map[string]any `json:"snapshots"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, e := range payload.Snapshots {
+		date := strings.TrimSpace(strval(e["date"]))
+		if date == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"date":  date,
+			"used":  quotaNumber(e["used"]),
+			"limit": quotaNumber(e["limit"]),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strval(out[i]["date"]) < strval(out[j]["date"])
+	})
+	return out
+}
+
+func appendCostSnapshot(home string, usage, limit any) []map[string]any {
+	snapshots := readCostSnapshots(home)
+	today := time.Now().UTC().Format("2006-01-02")
+	updated := false
+	for _, e := range snapshots {
+		if strval(e["date"]) == today {
+			e["used"] = usage
+			e["limit"] = limit
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		snapshots = append(snapshots, map[string]any{"date": today, "used": usage, "limit": limit})
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return strval(snapshots[i]["date"]) < strval(snapshots[j]["date"])
+	})
+	if len(snapshots) > costSnapshotMaxDays {
+		snapshots = snapshots[len(snapshots)-costSnapshotMaxDays:]
+	}
+	payload := map[string]any{"provider": "openrouter", "snapshots": snapshots}
+	data, _ := json.MarshalIndent(payload, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(costSnapshotsPath(home)), 0o755); err == nil {
+		atomicWriteFile(costSnapshotsPath(home), data)
+	}
+	return snapshots
+}
+
+func computeDeltas(snapshots []map[string]any, windowDays int) []map[string]any {
+	window := snapshots
+	if len(window) > windowDays {
+		window = window[len(window)-windowDays:]
+	}
+	var result []map[string]any
+	for i, entry := range window {
+		var delta any
+		if i > 0 {
+			prevUsed := quotaNumber(window[i-1]["used"])
+			curUsed := quotaNumber(entry["used"])
+			if curUsed != nil && prevUsed != nil {
+				if pf, ok1 := prevUsed.(float64); ok1 {
+					if cf, ok2 := curUsed.(float64); ok2 {
+						d := cf - pf
+						if d < 0 {
+							d = cf
+						}
+						if d < 1e-9 && d > -1e-9 {
+							d = 0.0
+						} else {
+							d = mathRound6(d)
+						}
+						delta = d
+					}
+				}
+			}
+		}
+		result = append(result, map[string]any{
+			"date":  entry["date"],
+			"used":  entry["used"],
+			"delta": delta,
+		})
+	}
+	return result
+}
+
+func mathRound6(v float64) float64 {
+	return float64(int64(v*1e6+0.5)) / 1e6
 }

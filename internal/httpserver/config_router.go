@@ -463,6 +463,39 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		}
 		writeJSON(w, resp)
 	})
+
+	r.Get("/api/provider/quota", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		q := req.URL.Query()
+		providerID := q.Get("provider")
+		refresh := strings.ToLower(strings.TrimSpace(q.Get("refresh"))) == "true"
+		writeJSON(w, providerQuota(home, providerID, refresh))
+	})
+
+	r.Get("/api/provider/cost-history", func(w http.ResponseWriter, req *http.Request) {
+		home := hermesHome
+		if home == "" {
+			home = defaultHermesHome()
+		}
+		q := req.URL.Query()
+		providerID := q.Get("provider")
+		days := 7
+		if raw := strings.TrimSpace(q.Get("days")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				if n < 1 {
+					n = 1
+				}
+				if n > 365 {
+					n = 365
+				}
+				days = n
+			}
+		}
+		writeJSON(w, providerCostHistory(home, providerID, days))
+	})
 }
 
 // settingsDefaults mirrors api/config.py _SETTINGS_DEFAULTS. A stored value in
