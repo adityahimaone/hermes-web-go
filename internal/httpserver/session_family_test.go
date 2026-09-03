@@ -281,6 +281,60 @@ func TestSessionFamilyHandlers(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate", func(t *testing.T) {
+		r, db := familyTestRouter(t, func(db *sql.DB) {
+			seedFamilySession(t, db, "s1")
+			if err := store.SetSessionFlag(db, "s1", "pinned", 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetSessionToolsets(db, "s1", []byte(`["web"]`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetSessionDraft(db, "s1", []byte(`{"text":"hi"}`)); err != nil {
+				t.Fatal(err)
+			}
+		})
+		code, m := doJSON(t, r, http.MethodPost, "/api/session/duplicate", `{"session_id":"s1"}`)
+		if code != 200 {
+			t.Fatalf("duplicate = %d %#v", code, m)
+		}
+		sess, _ := m["session"].(map[string]any)
+		if sess == nil {
+			t.Fatalf("duplicate session missing: %#v", m)
+		}
+		newID, _ := sess["session_id"].(string)
+		if newID == "" || newID == "s1" {
+			t.Fatalf("new session id = %q", newID)
+		}
+		if sess["title"] != "T (copy)" {
+			t.Fatalf("title = %#v", sess["title"])
+		}
+		if sess["workspace"] != "/tmp/w" || sess["model"] != "gpt-4o" {
+			t.Fatalf("workspace/model = %#v", sess)
+		}
+		if sess["pinned"] != float64(0) || sess["archived"] != float64(0) {
+			t.Fatalf("duplicate must reset pinned/archived: %#v", sess)
+		}
+		if sess["project_id"] != nil && sess["project_id"] != "" {
+			t.Fatalf("project_id = %#v", sess["project_id"])
+		}
+		msgs, _ := sess["messages"].([]any)
+		if len(msgs) != 2 {
+			t.Fatalf("messages len = %d", len(msgs))
+		}
+		newRow, _ := store.GetSession(db, newID)
+		if newRow.EnabledToolsets != `["web"]` || !strings.Contains(newRow.ComposerDraft, "hi") {
+			t.Fatalf("toolsets/draft not copied: %q %q", newRow.EnabledToolsets, newRow.ComposerDraft)
+		}
+	})
+
+	t.Run("duplicate_missing", func(t *testing.T) {
+		r, _ := familyTestRouter(t, nil)
+		if code, _ := doJSON(t, r, http.MethodPost, "/api/session/duplicate", `{"session_id":"nope"}`); code != 404 {
+			t.Fatalf("missing duplicate = %d", code)
+		}
+	})
+
 	t.Run("missing_session", func(t *testing.T) {
 		r, _ := familyTestRouter(t, nil)
 		if code, _ := doJSON(t, r, http.MethodPost, "/api/session/pin", `{"session_id":"nope"}`); code != 404 {

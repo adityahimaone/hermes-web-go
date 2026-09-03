@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -346,6 +347,52 @@ func SessionFamilyRouter(r chi.Router, db *sql.DB, reg streamRegistry) {
 		}
 		row, _ := store.GetSession(db, body.SessionID)
 		writeJSON(w, map[string]any{"ok": true, "session": sessionFull(row)})
+	})
+
+	// POST /api/session/duplicate
+	r.Post("/api/session/duplicate", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
+			writeError(w, http.StatusBadRequest, "session_id is required")
+			return
+		}
+		row, err := store.GetSession(db, body.SessionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "Session not found")
+			return
+		}
+		// Minimal duplicate (Opsi A): carry the fields the Go projection already
+		// has — title+" (copy)", workspace, model, full messages, project_id,
+		// enabled_toolsets, composer_draft. Pinned/archived reset to false,
+		// created/updated stamp now (Python duplicate semantics, routes.py:15449).
+		// Deliberately NOT carried: tokens, personality, context engine state,
+		// compression anchors, gateway routing — the Go store has no columns for
+		// them and the frontend re-derives context on the next turn.
+		title := row.Title
+		if title == "" {
+			title = "Untitled"
+		}
+		now := strconv.FormatInt(time.Now().Unix(), 10)
+		dupRow := store.SessionImport{
+			ID:              newSessionID(),
+			Title:           title + " (copy)",
+			Workspace:       row.Workspace,
+			Model:           row.Model,
+			Messages:        row.Messages,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			ProjectID:       row.ProjectID,
+			EnabledToolsets: row.EnabledToolsets,
+			ComposerDraft:   row.ComposerDraft,
+		}
+		if err := store.ImportSession(db, dupRow); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to duplicate session")
+			return
+		}
+		newRow, _ := store.GetSession(db, dupRow.ID)
+		writeJSON(w, map[string]any{"session": sessionFull(newRow)})
 	})
 
 	// POST /api/session/clear

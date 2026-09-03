@@ -109,9 +109,13 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       `compact|messages` response), `/api/session/clear` (truncate-0 + title reset to
       `Untitled`, compact response). Schema gained `enabled_toolsets` + `composer_draft`
       columns with migration; importer (`copySessionJSON`) carries both.
-      **Deferred:** `/api/session/duplicate` + `/api/sessions/cleanup` (see progress-log —
-      needs fields the projection lacks / filesystem reconciliation).
-      Evidence: `TestSessionFamilyHandlers` (17 subtests), `TestSessionFamilyNativeNoProxyFallback`.
+      `/api/session/duplicate` (minimal: title+" (copy)", workspace, model, messages,
+      project_id, toolsets, draft; pinned/archived reset; fresh timestamps — carried
+      fields = what the Go projection has; tokens/personality/context-engine deferred
+      until importer enrichment).
+      **Deferred:** `/api/sessions/cleanup` (filesystem sweep needs importer-aware
+      file reconciliation).
+      Evidence: `TestSessionFamilyHandlers` (20 subtests), `TestSessionFamilyNativeNoProxyFallback`.
 
 ## Phase 4 — Chat + streaming
 

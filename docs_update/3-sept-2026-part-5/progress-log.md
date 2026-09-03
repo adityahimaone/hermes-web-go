@@ -129,20 +129,25 @@ Blueprint §2.3 defect list closed on Go side. Committed as one change set.
 - `go vet ./...` — PASS
 - `git diff --check` — PASS
 - New regressions: `session_family_test.go` — `TestSessionFamilyHandlers`
-  (17 subtests: status shape, pin quota, toolsets validation incl empty/blank,
-  draft caps, truncate negative, clear, move unknown project, agent_running
-  liveness), `TestSessionFamilyNativeNoProxyFallback`.
+  (20 subtests: status shape, pin quota, toolsets validation incl empty/blank,
+  draft caps, truncate negative, clear, move unknown project, duplicate copy +
+  reset + missing, agent_running liveness), `TestSessionFamilyNativeNoProxyFallback`.
+- `/api/session/duplicate` added (minimal): duplicates the fields the Go
+  projection already has — title+" (copy)", workspace, model, full messages,
+  project_id, enabled_toolsets, composer_draft; resets pinned/archived to false;
+  stamps created/updated now. Registered native in proxy registry. Deliberately
+  not carried (no Go columns yet): tokens, personality, context engine state,
+  compression anchors, gateway routing — Python duplicate carries these, but the
+  frontend re-derives context on the next turn so the visible behavior is
+  preserved without importer enrichment.
 
 ## Deferred (documented in code + 04-task-breakdown)
-- `/api/session/duplicate`: Python copies tokens/personality/toolsets +
-  continuation semantics; Go projection lacks those fields — exact parity
-  impossible until importer learns them.
 - `/api/sessions/cleanup`: filesystem sweep of Untitled/empty session files,
   not a DB projection — needs importer-aware file reconciliation.
 
 ## Next step
-- Frontend verification against the new response shapes; remaining
-  session-lifecycle family items (duplicate/cleanup) after importer enrichment.
+- Frontend verification against the new response shapes; `/api/sessions/cleanup`
+  after importer enrichment.
 
 ---
 
