@@ -122,6 +122,25 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		}
 	}
 	if cfg.AgentBaseURL == "" {
+		// No HTTP runner configured. If the agent gRPC socket is present
+		// (hermes gateway/agent_grpc shim running), still use the agent
+		// router so chat/approval/clarify work natively. Otherwise fall
+		// back to the data-only router (chat proxied if LegacyProxyURL set,
+		// else 404).
+		socket := cfg.AgentSocket
+		if socket == "" {
+			socket = filepath.Join(cfg.DataRoot, "agent.sock")
+		}
+		client, err := agentclient.NewBestClient(context.Background(), agentclient.TransportConfig{
+			Mode:       agentclient.TransportGRPC,
+			SocketPath: socket,
+		}, agentclient.NewHTTPClient("", ""))
+		if err == nil {
+			log.Printf("agent transport: using gRPC socket %s (no runner base URL)", socket)
+			approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
+			return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore, opts...)
+		}
+		log.Printf("agent transport: gRPC socket %s unavailable (%v); data-only router", socket, err)
 		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, opts...)
 	}
 	httpFallback := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)

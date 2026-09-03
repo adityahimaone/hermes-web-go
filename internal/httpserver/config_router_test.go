@@ -886,6 +886,16 @@ func TestReasoningAndDashboard(t *testing.T) {
 	if len(projs8) != 2 {
 		t.Errorf("expected 2 projects with all_profiles=1, got %d", len(projs8))
 	}
+
+	// /api/clarify/pending — empty shape (200, not 404)
+	aux = auxRequest(t, home, "GET", "/api/clarify/pending?session_id=x", "")
+	var m9 map[string]any
+	if err := json.Unmarshal(aux.Body.Bytes(), &m9); err != nil {
+		t.Fatal(err)
+	}
+	if pend, ok := m9["pending"]; !ok || pend != nil {
+		t.Errorf("expected pending=null, got %v", m9["pending"])
+	}
 }
 
 func TestProvidersSetKey(t *testing.T) {

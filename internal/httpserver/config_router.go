@@ -542,6 +542,15 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		writeJSON(w, authStatus(home))
 	})
 
+	// /api/clarify/pending — clarify state lives in the Python gateway bridge
+	// (api/clarify.py in-memory queues), which Go does not yet observe. Return
+	// the empty shape so the frontend polling loop gets HTTP 200 instead of a
+	// route-not-found 404 ("Clarify endpoint unavailable. Restart server."
+	// toast). SSE stream + respond stay proxy/agent-boundary.
+	r.Get("/api/clarify/pending", func(w http.ResponseWriter, req *http.Request) {
+		writeJSON(w, map[string]any{"pending": nil})
+	})
+
 	r.Post("/api/reasoning", func(w http.ResponseWriter, req *http.Request) {
 		home := hermesHome
 		if home == "" {

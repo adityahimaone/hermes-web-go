@@ -108,6 +108,7 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/approval/respond":              {http.MethodPost: true},
 	"/api/auth/login":                    {http.MethodPost: true},
 	"/api/auth/status":                   {http.MethodGet: true},
+	"/api/clarify/pending":               {http.MethodGet: true},
 }
 
 func IsNativeMethod(method, path string) bool {
@@ -164,6 +165,7 @@ var NativeRoutes = map[string]bool{
 	"/api/approval/respond":              true,
 	"/api/auth/login":                    true,
 	"/api/auth/status":                   true,
+	"/api/clarify/pending":               true,
 	"/api/profile/active":                true,
 	"/api/profiles":                      true,
 	"/api/settings":                      true,
