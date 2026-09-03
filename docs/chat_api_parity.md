@@ -160,7 +160,65 @@ Browser automation status: blocked by macOS permission gate, not app behavior. M
 
 ---
 
-## 4. SSE Event Format Reference
+## 4. Follow-up Issue: History Temporarily Disappears In Active Room
+
+### Reported behavior
+
+While staying inside one session room, previously visible Hermes responses suddenly disappear. Switching to another session and returning makes the responses visible again. This suggests persisted history may remain intact while the active frontend projection is stale or overwritten. It can happen after a new chat trigger; the initial page/session load looks correct.
+
+### Current evidence
+
+```text
+Session: 0733f8d8ac96
+SQLite messages after live turn: json_array_length(messages) = 22
+Go GET /api/session?session_id=0733f8d8ac96: 200
+```
+
+A prior live trace for the same session showed:
+
+```text
+POST /api/chat/start -> stream_id 888c30d7eff3
+GET /api/chat/stream?stream_id=888c30d7eff3 -> token/tool/done
+Done payload -> full session snapshot, 12 messages at that point
+```
+
+Switching rooms restores the transcript. That behavior is consistent with DB persistence succeeding and the active room's in-memory `S.messages` or DOM being replaced/cleared. It does not prove the backend is innocent; both sides remain candidates until browser console/network logs are captured.
+
+### Main suspects
+
+1. Frontend async race: `/api/chat/stream` terminal callbacks (`done`, `stream_end`, SSE `error`) can overlap with `_restoreSettledSession()` and session refresh callbacks. These paths can all call `renderMessages()` and mutate `S.messages`.
+2. Frontend state replacement: `static/messages.js` writes `S.messages` in the done handler and recovery path. `static/sessions.js`, `static/ui.js`, `static/commands.js`, and `static/outline.js` also replace it during refresh/command/session transitions.
+3. Live snapshot merge: `_carryForwardEphemeralTurnFields()` preserves ephemeral fields but does not protect against a valid, shorter/stale session snapshot replacing a longer visible transcript. The `stream_end` recovery path has special handling for terminal markers; verify it covers normal history-loss timing.
+4. Backend timing: Go persists assistant content before emitting `done`, but a session GET racing immediately after user-message persistence may briefly return a pre-assistant snapshot. Frontend must not commit that transient snapshot over a live transcript after terminal settlement.
+
+### Browser trace blocker
+
+Browser automation was attempted with Browser Use and CuaDriver. Browser Use returned no CDP endpoint. CuaDriver installation succeeded, but macOS Accessibility/Screen Recording permissions remained pending. No browser console, DOM mutation, or DevTools network HAR has been captured yet.
+
+### Required next-agent investigation
+
+Capture one reproduction while DevTools is open for `/session/0733f8d8ac96`:
+
+1. Record `S.messages.length`, `S.session.session_id`, `S.activeStreamId`, `S.session.active_stream_id` before send, on every SSE event, after `done`, after `stream_end`, and after every `/api/session` response.
+2. Log every assignment to `S.messages` in `messages.js`, `sessions.js`, `ui.js`, `commands.js`, and `outline.js`, including source function and incoming message count.
+3. Capture request order and response bodies for `POST /api/chat/start`, `GET /api/chat/stream`, `GET /api/session?session_id=...`, and any session refresh request.
+4. Compare visible DOM message count against `S.messages.length` after the disappearance, then switch room and compare against the same DB/API count.
+5. Reproduce with network throttling and without throttling. If only throttled, classify as frontend async ordering race.
+6. Add a regression test at lifecycle/integration boundary; pure helper tests are insufficient.
+
+### Interim classification
+
+```text
+Persisted DB/API history: present in latest trace
+Active-room display: intermittent loss reported
+Likely layer: frontend state/lifecycle race
+Backend possibility: stale snapshot or stream terminal ordering
+Confidence: hypothesis only until browser logs exist
+```
+
+---
+
+## 5. SSE Event Format Reference
 
 ### 3.1 Token Delta
 ```
