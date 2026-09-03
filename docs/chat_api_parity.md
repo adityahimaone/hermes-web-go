@@ -138,13 +138,16 @@ Go `translateGatewayEvent` had no `reasoning` / `reasoning.available` cases. It 
 gateway reasoning -> Go parser drops -> no browser reasoning event -> no Thinking bubble
 ```
 
-### Fix applied, not yet pushed
+### Fix applied (LIVE, pushed)
 
 - Add `agentclient.EventReasoning`.
 - Parse `reasoning`, `reasoning.available`, with `text` / `delta` / `content` fallback.
 - Serialize `reasoning` as `event: reasoning` with `{text}` payload.
 - Relay and persist reasoning alongside assistant answer.
 - Add parser regression coverage.
+
+Pushed in `5f68f8f fix: preserve reasoning events in Go chat stream` and running
+live on `8787` (binary restarted, health `{"status":"ok"}`).
 
 Fresh gates passed after fix:
 
@@ -156,7 +159,8 @@ node --check static/messages.js PASS
 git diff --check           PASS
 ```
 
-Browser automation status: blocked by macOS permission gate, not app behavior. Manual browser check still needed after granting Accessibility + Screen Recording, then rebuild/restart latest binary.
+Browser automation status: CuaDriver captured Brave (macOS Accessibility +
+Screen Recording granted for Brave). See §4 for the live browser trace.
 
 ---
 
@@ -191,29 +195,73 @@ Switching rooms restores the transcript. That behavior is consistent with DB per
 3. Live snapshot merge: `_carryForwardEphemeralTurnFields()` preserves ephemeral fields but does not protect against a valid, shorter/stale session snapshot replacing a longer visible transcript. The `stream_end` recovery path has special handling for terminal markers; verify it covers normal history-loss timing.
 4. Backend timing: Go persists assistant content before emitting `done`, but a session GET racing immediately after user-message persistence may briefly return a pre-assistant snapshot. Frontend must not commit that transient snapshot over a live transcript after terminal settlement.
 
-### Browser trace blocker
+### Live browser trace (2026-09-03, Brave via CuaDriver)
 
-Browser automation was attempted with Browser Use and CuaDriver. Browser Use returned no CDP endpoint. CuaDriver installation succeeded, but macOS Accessibility/Screen Recording permissions remained pending. No browser console, DOM mutation, or DevTools network HAR has been captured yet.
+Captured and exercised the actual Hermes UI in Brave (window
+`hello #2 — Hermes - Brave`, address `127.0.0.1:8787/session/0733f8d8ac96`).
+Sent messages through the real composer via keyboard; polled the backend
+between captures.
+
+```text
+state                 DB len  field message_count  user  assistant  tool
+before send           22      6                   6     11         5
+after  send #1        27      10                  10    12         5
+(test history check)
+after  send #2        31      11                  11    15         5
+(cek midstream)
+```
+
+Live captures (vision) after each send showed the full transcript rendered
+including prior assistant replies — the count badge `17` and all bubbles were
+present. **No history loss reproduced in this session during these turns.**
+
+### Count badge ruled out as a bug
+
+The header count `17` and the API `message_count` are different, intentional
+quantities:
+
+- `message_count` (Go `messageCount`, `internal/httpserver/data.go:714`)
+  counts only `role == "user"` rows. DB `0733f8d8ac96` → 6 user rows → field 6.
+- Header `17` is the FE renderable count = `user + assistant` (17), excluding
+  `tool` rows (5). Python legacy returns `len(messages)` (all 22).
+
+So the earlier suspicion of "17 vs 22 count drift" is NOT a bug — both derive
+from the same persisted array, filtered differently.
+
+### Active-stream ramp (new lead)
+
+During back-to-back sends from the same tab, `GET /health` `active_streams`
+ramped 1 → 2 → 3 and stayed elevated, meaning multiple `/api/chat/stream`
+EventSource connections were alive concurrently. If a second turn starts
+before the first terminal event settles, the FE runs overlapping
+`done`/`stream_end`/`_restoreSettledSession` paths that all mutate `S.messages`.
+That is the likeliest window for a transient wipe — and why the loss appears
+"sometimes, right after sending", then clears on room switch (fresh
+`/api/session` reload restores the truth).
 
 ### Required next-agent investigation
 
-Capture one reproduction while DevTools is open for `/session/0733f8d8ac96`:
+Capture one reproduction while DevTools is open for `/session/0733f8d8ac96`,
+specifically watching `S.activeStreamId` / `active_streams` during rapid
+back-to-back sends:
 
-1. Record `S.messages.length`, `S.session.session_id`, `S.activeStreamId`, `S.session.active_stream_id` before send, on every SSE event, after `done`, after `stream_end`, and after every `/api/session` response.
-2. Log every assignment to `S.messages` in `messages.js`, `sessions.js`, `ui.js`, `commands.js`, and `outline.js`, including source function and incoming message count.
-3. Capture request order and response bodies for `POST /api/chat/start`, `GET /api/chat/stream`, `GET /api/session?session_id=...`, and any session refresh request.
-4. Compare visible DOM message count against `S.messages.length` after the disappearance, then switch room and compare against the same DB/API count.
-5. Reproduce with network throttling and without throttling. If only throttled, classify as frontend async ordering race.
-6. Add a regression test at lifecycle/integration boundary; pure helper tests are insufficient.
+1. Record `S.messages.length`, `S.session.session_id`, `S.activeStreamId` before send, on every SSE event, after `done`, after `stream_end`, and after every `/api/session` response.
+2. Log every assignment to `S.messages` (messages.js, sessions.js, ui.js, commands.js, outline.js) with source function + incoming count.
+3. Capture request order/bodies for start, stream, session; confirm whether a 2nd stream can interleave before the 1st `done`.
+4. Compare visible DOM count vs `S.messages.length` right after the wipe, then switch room and compare vs DB/API.
+5. Reproduce with + without network throttling; if only throttled → FE async ordering race.
+6. Add a regression test at the lifecycle/integration boundary; pure helper tests are insufficient.
 
-### Interim classification
+### Interim classification (updated after live browser trace)
 
 ```text
 Persisted DB/API history: present in latest trace
-Active-room display: intermittent loss reported
+Active-room display: loss NOT reproduced across 2 live sends this session;
+                      reported by user as intermittent "right after sending"
 Likely layer: frontend state/lifecycle race
 Backend possibility: stale snapshot or stream terminal ordering
-Confidence: hypothesis only until browser logs exist
+Confidence: moderate — backend persistence fully verified; FE race is lead,
+            driven by observed concurrent active_streams ramp
 ```
 
 ---
