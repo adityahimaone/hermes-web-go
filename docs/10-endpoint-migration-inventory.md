@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 111 |
-| **Not yet migrated (proxied to Python)** | **118** |
+| Native Go `/api/*` endpoints | 124 |
+| **Not yet migrated (proxied to Python)** | **105** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -81,6 +81,19 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/workspaces/health` | `misc_wave3.go` |
 | GET | `/api/workspaces/filemap` | `misc_wave3.go` |
 | GET | `/api/plugins` | `misc_wave3.go` |
+| GET | `/api/git/status` | `git_panel.go` |
+| GET | `/api/git/branches` | `git_panel.go` |
+| GET | `/api/git/diff` | `git_panel.go` |
+| POST | `/api/git/stage` | `git_panel.go` |
+| POST | `/api/git/unstage` | `git_panel.go` |
+| POST | `/api/git/discard` | `git_panel.go` |
+| POST | `/api/git/commit` | `git_panel.go` |
+| POST | `/api/git/commit-selected` | `git_panel.go` |
+| POST | `/api/git/fetch` | `git_panel.go` |
+| POST | `/api/git/pull` | `git_panel.go` |
+| POST | `/api/git/push` | `git_panel.go` |
+| POST | `/api/git/checkout` | `git_panel.go` |
+| POST | `/api/git/stash-checkout` | `git_panel.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
