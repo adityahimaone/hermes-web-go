@@ -154,8 +154,8 @@ func insightsRouter(r chi.Router, db *sql.DB) {
 		totalSessions := 0
 		models := map[string]*modelAgg{}
 		daily := map[string]*modelAgg{}
-		dow := map[string]int{}
-		hod := map[string]int{}
+		dow := [7]int{}
+		hod := [24]int{}
 		cutoff := time.Now().AddDate(0, 0, -(days - 1)).Unix()
 		for _, s := range rows {
 			if s.UpdatedAt < float64(cutoff) {
@@ -206,8 +206,18 @@ func insightsRouter(r chi.Router, db *sql.DB) {
 			d.inTokens += m.inTokens
 			d.outTokens += m.outTokens
 			d.cost += m.cost
-			dow[time.Unix(int64(s.UpdatedAt), 0).Format("Monday")]++
-			hod[strconv.Itoa(time.Unix(int64(s.UpdatedAt), 0).Hour())]++
+			ts := time.Unix(int64(s.UpdatedAt), 0)
+			dow[(int(ts.Weekday())+6)%7]++ // Monday-first index (Python parity)
+			hod[ts.Hour()]++
+		}
+		dowLabels := [7]string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+		dowOut := make([]map[string]any, 7)
+		for i := 0; i < 7; i++ {
+			dowOut[i] = map[string]any{"day": dowLabels[i], "sessions": dow[i]}
+		}
+		hodOut := make([]map[string]any, 24)
+		for h := 0; h < 24; h++ {
+			hodOut[h] = map[string]any{"hour": h, "sessions": hod[h]}
 		}
 		modelsOut := map[string]any{}
 		for name, m := range models {
@@ -245,8 +255,8 @@ func insightsRouter(r chi.Router, db *sql.DB) {
 			"total_cost":              totalCost,
 			"models":                  modelsOut,
 			"daily_tokens":            dailyOut,
-			"activity_by_day":         dow,
-			"activity_by_hour":        hod,
+			"activity_by_day":         dowOut,
+			"activity_by_hour":        hodOut,
 		})
 	})
 }
