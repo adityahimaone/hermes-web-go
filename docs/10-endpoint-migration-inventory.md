@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 93 |
-| **Not yet migrated (proxied to Python)** | **142** |
+| Native Go `/api/*` endpoints | 101 |
+| **Not yet migrated (proxied to Python)** | **128** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -63,6 +63,14 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/updates/check` | `misc_reads.go` |
 | GET | `/api/onboarding/status` | `misc_reads.go` |
 | GET | `/api/git-info` | `git_info.go` |
+| POST | `/api/auth/logout` | `misc_wave2.go` |
+| GET | `/api/commands` | `misc_wave2.go` |
+| GET | `/api/commands/bundles` | `misc_wave2.go` |
+| GET | `/api/personalities` | `misc_wave2.go` |
+| GET | `/api/prompts` | `misc_wave2.go` |
+| POST | `/api/default-model` | `misc_wave2.go` |
+| GET | `/api/knowledge` | `misc_wave2.go` |
+| POST | `/api/csp-report` | `misc_wave2.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |

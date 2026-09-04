@@ -145,6 +145,35 @@ func (a *Auth) VerifySession(value string) bool {
 	return false
 }
 
+// InvalidateSession removes a session token (raw token, not the signed
+// cookie value) and persists the session store.
+func (a *Auth) InvalidateSession(value string) {
+	i := strings.LastIndex(value, ".")
+	if i <= 0 {
+		return
+	}
+	token := value[:i]
+	a.mu.Lock()
+	_, ok := a.sessions[token]
+	delete(a.sessions, token)
+	a.mu.Unlock()
+	if ok {
+		_ = a.saveSessions()
+	}
+}
+
+// ClearCookie expires the auth cookie.
+func (a *Auth) ClearCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     a.CookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
