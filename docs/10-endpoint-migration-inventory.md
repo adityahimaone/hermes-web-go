@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 180 |
-| **Not yet migrated (proxied to Python)** | **64** |
+| Native Go `/api/*` endpoints | 188 |
+| **Not yet migrated (proxied to Python)** | **56** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -194,8 +194,8 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
   `commit-message`, `commit-message-selected`, `push`, `pull`, `fetch`, `checkout`,
   `stash-checkout`, `stage`, `unstage`, `discard`, `branches`)
 - `/api/git-info`
-- `/api/file/*` extras: `create-dir`, `move`, `rename`, `reveal`, `path`, `open-vscode`, `office-save`
-- `/api/folder/download`
+- ~~`/api/file/*` extras: `create-dir`, `move`, `rename`, `reveal`, `path`, `open-vscode`, `office-save`~~ — migrated to native Go 2026-09-04 (`file_ops.go`: `Wave19Router`; symlink-leaf guard before exists() (dangling symlink → 400), new_name charset check, move-into-itself guard, vscode config block + host/container prefix translation; `office-save` validates ext/dir/symlink then returns 503 — no OOXML editor bundled in Go runtime, deliberate)
+- ~~`/api/folder/download`~~ — migrated to native Go 2026-09-04 (`file_ops.go`: zip stream, pre-flight walk with 413 on `HERMES_WEBUI_FOLDER_ZIP_MAX_FILES` (default 50000) / `HERMES_WEBUI_FOLDER_ZIP_MAX_MB` (default 1024), symlinks escaping the workspace skipped, `Connection: close` parity)
 - `/api/workspace/upload` (note: singular, distinct from `/api/upload` which is native)
 
 ### Auth / identity
