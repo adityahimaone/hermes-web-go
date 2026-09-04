@@ -35,12 +35,19 @@ def _translate(pl, fallback_event):
         t = pl.get("delta", "") or pl.get("text", "") or ""
         return "token", t, "", ""
     if et in ("reasoning", "reasoning.available"):
-        t = pl.get("text", "") or pl.get("delta", "") or pl.get("content", "") or ""
-        return "reasoning", t, "", ""
+        # gateway's reasoning.available for this model is an echo of the final
+        # answer (real chain-of-thought is not exposed through /v1/runs). Emitting
+        # it as `reasoning` makes the Thinking card flash for ~30ms then vanish on
+        # `done`. Drop it entirely: live activity stays visible via
+        # tool.started/tool.completed rows, which is the real progress signal.
+        return "", "", "", ""
     if et in ("tool", "tool.started"):
-        return "tool", "", pl.get("name", ""), pl.get("preview", "")
+        # gateway sends {"tool":"terminal","preview":"date"} not {"name":...}
+        name = pl.get("tool", "") or pl.get("name", "")
+        return "tool", "", str(name), str(pl.get("preview", "") or "")
     if et in ("tool_complete", "tool.completed"):
-        return "tool_complete", "", pl.get("name", ""), pl.get("preview", "")
+        name = pl.get("tool", "") or pl.get("name", "")
+        return "tool_complete", "", str(name), str(pl.get("preview", "") or "")
     if et == "interim_assistant":
         return "interim_assistant", pl.get("text", "") or "", "", ""
     if et == "run.completed":
