@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 132 |
-| **Not yet migrated (proxied to Python)** | **97** |
+| Native Go `/api/*` endpoints | 138 |
+| **Not yet migrated (proxied to Python)** | **91** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -102,6 +102,12 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/upload/extract` | `misc_wave4.go` |
 | GET | `/api/mcp/servers` | `misc_wave4.go` |
 | GET | `/api/mcp/tools` | `misc_wave4.go` |
+| POST | `/api/session/undo` | `session_mutations.go` |
+| POST | `/api/session/retry` | `session_mutations.go` |
+| POST | `/api/session/title/regenerate` | `session_mutations.go` |
+| POST | `/api/session/yolo` | `session_mutations.go` |
+| GET | `/api/session/yolo/status` | `session_mutations.go` |
+| POST | `/api/updates/apply` | `session_mutations.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
