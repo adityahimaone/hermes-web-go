@@ -18,7 +18,7 @@ func eventJSON(ev agentclient.TurnEvent) []byte {
 		b, _ := json.Marshal(map[string]string{"text": ev.Text})
 		return b
 	case agentclient.EventTool:
-		b, _ := json.Marshal(map[string]string{"name": ev.Name, "preview": ev.Preview})
+		b, _ := json.Marshal(map[string]any{"name": ev.Name, "preview": ev.Preview})
 		return b
 	case agentclient.EventApproval, agentclient.EventDone:
 		b, _ := json.Marshal(ev.Data)
@@ -27,6 +27,18 @@ func eventJSON(ev agentclient.TurnEvent) []byte {
 		b, _ := json.Marshal(map[string]string{"message": ev.Error})
 		return b
 	default:
+		// Pass-through: all other events (tool_complete, interim_assistant,
+		// metering, context_status, todo_state, title, compressing) carry
+		// their full original payload so the frontend's addEventListener
+		// handlers receive exactly what the Python gateway emitted.
+		if len(ev.Data) > 0 {
+			b, _ := json.Marshal(ev.Data)
+			return b
+		}
+		if ev.Text != "" {
+			b, _ := json.Marshal(map[string]string{"text": ev.Text})
+			return b
+		}
 		b, _ := json.Marshal(map[string]string{"message": "unknown event type"})
 		return b
 	}

@@ -167,17 +167,33 @@ func translateGatewayEvent(eventType string, payload map[string]any) (TurnEvent,
 		return TurnEvent{}, false
 	case "done":
 		return TurnEvent{Type: EventDone, Data: payload}, true
-	case "tool":
+	case "tool", "tool.started":
 		name, _ := payload["name"].(string)
 		preview, _ := payload["preview"].(string)
+		// frontend listens for SSE event "tool"
 		return TurnEvent{Type: EventTool, Name: name, Preview: preview, Data: payload}, true
+	case "tool_complete", "tool.completed":
+		name, _ := payload["name"].(string)
+		preview, _ := payload["preview"].(string)
+		return TurnEvent{Type: EventType("tool_complete"), Name: name, Preview: preview, Data: payload}, true
+	case "interim_assistant":
+		text, _ := payload["text"].(string)
+		return TurnEvent{Type: EventType("interim_assistant"), Text: text, Data: payload}, true
 	case "approval":
 		return TurnEvent{Type: EventApproval, Data: payload}, true
 	case "error":
 		msg, _ := payload["message"].(string)
 		return TurnEvent{Type: EventError, Error: msg, Data: payload}, true
 	default:
-		return TurnEvent{}, false
+		// Pass through all other gateway events (metering, context_status,
+		// title, todo_state, compressing, etc.) so the frontend's
+		// addEventListener handlers fire. Without this, the Go relay drops
+		// UI-critical events and the WebUI shows a degraded "sudden reply"
+		// with no thinking/tool/context updates (image 1 vs 3 gap).
+		if eventType == "" {
+			return TurnEvent{}, false
+		}
+		return TurnEvent{Type: EventType(eventType), Data: payload}, true
 	}
 }
 
