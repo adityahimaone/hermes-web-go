@@ -17,7 +17,11 @@ const (
 	EventTool      EventType = "tool"
 	EventApproval  EventType = "approval"
 	EventDone      EventType = "done"
-	EventError     EventType = "error"
+	// EventTypeStreamEnd is the Python-parity post-done terminal frame
+	// (gateway_chat.py emits done then stream_end). Carried here so the
+	// httpserver can reference it without its own string literal.
+	EventTypeStreamEnd EventType = "stream_end"
+	EventError         EventType = "error"
 )
 
 // TurnRequest is the per-turn execution contract. TaskID (not SessionID) is

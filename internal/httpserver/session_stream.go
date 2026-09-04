@@ -124,6 +124,23 @@ func SessionStreamRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, 
 				}) {
 					return
 				}
+				// A live turn may already have persisted messages past the
+				// reconnecting tab's known_count (turn finishing while the
+				// journal is still open). Send the count self-heal too — the
+				// two signals are not mutually exclusive.
+				if known != nil && db != nil {
+					if row, err := store.GetSession(db, sid); err == nil {
+						persisted := persistedMessageCount(row.Messages)
+						if persisted != nil && *persisted > *known {
+							_ = writeSSE("session-updated", map[string]any{
+								"session_id":    sid,
+								"message_count": *persisted,
+								"known_count":   *known,
+								"source":        "subscribe_recovery",
+							})
+						}
+					}
+				}
 			} else if known != nil && db != nil {
 				// Stale activeID that already finished — fall through to
 				// the "finished during gap" branch below.

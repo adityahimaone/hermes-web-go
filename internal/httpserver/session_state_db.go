@@ -52,8 +52,11 @@ func readStateDBMessages(hermesHome, sid string) []map[string]any {
 		return nil
 	}
 	defer db.Close()
-	// Read-only + busy timeout: state.db is owned by the agent/gateway.
-	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=2000"} {
+	// Read-only + SHORT busy timeout: state.db is owned by the agent, which
+	// holds write locks frequently. A reader must never stall a turn's done
+	// event behind agent write contention — a missed merge is recoverable on
+	// the next GET /api/session, a stalled done is not.
+	for _, pragma := range []string{"PRAGMA query_only=ON", "PRAGMA busy_timeout=250"} {
 		_, _ = db.Exec(pragma)
 	}
 	rows, err := db.Query(`
@@ -111,20 +114,84 @@ func readStateDBMessages(hermesHome, sid string) []map[string]any {
 }
 
 // reconcileSessionMessages merges the webui.db sidecar projection with
-// state.db rows. state.db is the agent's authoritative transcript and is a
-// superset of the sidecar projection for the same session: when it has at
-// least as many rows, the sidecar is fully superseded. Only a longer sidecar
-// tail (optimistic rows written after the last state.db snapshot) is appended.
+// state.db rows. state.db is the agent's authoritative transcript, but the
+// sidecar can hold fresher rows (the just-finished turn the agent has not
+// flushed yet — typically the final assistant message carrying _turnDuration).
+// Sidecar rows that duplicate state.db tail rows (same role + content head)
+// or predate the state.db tail are skipped; everything else is appended.
 func reconcileSessionMessages(sidecar []map[string]any, stateRows []map[string]any) []map[string]any {
 	if len(stateRows) == 0 {
 		return sidecar
 	}
-	if len(sidecar) <= len(stateRows) {
-		return stateRows
+	last := lastTimestamp(stateRows)
+	const tailWindow = 40
+	tailStart := len(stateRows) - tailWindow
+	if tailStart < 0 {
+		tailStart = 0
+	}
+	tailKeys := make(map[string]bool, tailWindow)
+	for _, r := range stateRows[tailStart:] {
+		tailKeys[messageContentKey(r)] = true
 	}
 	merged := stateRows
-	merged = append(merged, sidecar[len(stateRows):]...)
+	for _, m := range sidecar {
+		ts, _ := m["timestamp"].(float64)
+		key := messageContentKey(m)
+		if ts != 0 && ts <= last && !tailKeys[key] {
+			continue // durable row already covered by state.db
+		}
+		if tailKeys[key] {
+			continue // duplicate projection of a state.db tail row
+		}
+		merged = append(merged, m)
+	}
+	carryTurnMetaToLastAssistant(merged, sidecar)
 	return merged
+}
+
+// carryTurnMetaToLastAssistant copies the WebUI's turn timing (_turnDuration,
+// _turnTps, _firstTokenMs, _usedModel) onto the merged transcript's final
+// assistant message when state.db's copy lacks it: the agent's state.db flush
+// does not carry the WebUI-computed timing, and the settled UI renders
+// "Processed in Xs" from that field.
+func carryTurnMetaToLastAssistant(merged, sidecar []map[string]any) {
+	var dst map[string]any
+	for i := len(merged) - 1; i >= 0; i-- {
+		if merged[i]["role"] == "assistant" {
+			dst = merged[i]
+			break
+		}
+	}
+	if dst == nil || dst["_turnDuration"] != nil {
+		return
+	}
+	for i := len(sidecar) - 1; i >= 0; i-- {
+		m := sidecar[i]
+		if m["role"] != "assistant" {
+			continue
+		}
+		if m["_turnDuration"] == nil {
+			continue
+		}
+		for _, k := range []string{"_turnDuration", "_turnTps", "_firstTokenMs", "_usedModel"} {
+			if v, ok := m[k]; ok {
+				dst[k] = v
+			}
+		}
+		return
+	}
+}
+
+// messageContentKey identifies a row by role + content head; both stores use
+// the same content projection for user/assistant rows, so this is a reliable
+// duplicate signal for fresh-tail reconciliation.
+func messageContentKey(m map[string]any) string {
+	role, _ := m["role"].(string)
+	content, _ := m["content"].(string)
+	if len(content) > 80 {
+		content = content[:80]
+	}
+	return role + "\x00" + content
 }
 
 func lastTimestamp(rows []map[string]any) float64 {

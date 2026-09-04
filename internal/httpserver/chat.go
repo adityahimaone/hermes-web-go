@@ -131,7 +131,18 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 					m["_usedModel"] = modelUsed
 					_ = store.AppendMessage(db, sessionID, m)
 				}
+				// Clear in-flight turn marker so the session no longer reports
+				// busy/pending after the run completes or fails.
+				if err := store.SetSessionPending(db, sessionID, 0, "", ""); err != nil {
+					log.Printf("chat: clear pending failed session=%s: %v", sessionID, err)
+				}
+				turnElapsed := float64(time.Now().UnixNano())/1e9 - turnStart
 				// Build session payload for done event (matches Python gateway shape).
+				// Messages must be the state.db-reconciled transcript (Python
+				// parity via _session_payload_with_full_messages): the FE swaps
+				// the live turn for this payload when done lands, so tool rows
+				// ("Processed" worklog), Thinking cards, and metadata survive
+				// the swap instead of disappearing until the next reload.
 				var doneData map[string]any
 				row, err := store.GetSession(db, sessionID)
 				if err == nil {
@@ -139,27 +150,36 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 					if row.Messages != "" {
 						_ = json.Unmarshal([]byte(row.Messages), &messages)
 					}
-					doneData = map[string]any{"session": map[string]any{
-						"session_id":    row.ID,
-						"title":         row.Title,
-						"workspace":     row.Workspace,
-						"model":         row.Model,
-						"created_at":    row.CreatedAt,
-						"updated_at":    row.UpdatedAt,
-						"pinned":        row.Pinned,
-						"archived":      row.Archived,
-						"project_id":    row.ProjectID,
-						"rev":           row.Rev,
-						"message_count": len(messages),
-						"messages":      messages,
-					}}
+					if stateRows := readStateDBMessages("", sessionID); len(stateRows) > 0 {
+						messages = reconcileSessionMessages(messages, stateRows)
+					}
+					doneData = map[string]any{
+						"session": map[string]any{
+							"session_id":    row.ID,
+							"title":         row.Title,
+							"workspace":     row.Workspace,
+							"model":         row.Model,
+							"created_at":    row.CreatedAt,
+							"updated_at":    row.UpdatedAt,
+							"pinned":        row.Pinned,
+							"archived":      row.Archived,
+							"project_id":    row.ProjectID,
+							"rev":           row.Rev,
+							"message_count": len(messages),
+							"messages":      messages,
+						},
+						// Python gateway sends usage on done; the FE reads
+						// usage.duration_seconds to stamp the settled turn
+						// duration when the message lacks _turnDuration.
+						"usage": map[string]any{
+							"duration_seconds": turnElapsed,
+						},
+					}
 				}
-				// Clear in-flight turn marker so the session no longer reports
-				// busy/pending after the run completes or fails.
-				if err := store.SetSessionPending(db, sessionID, 0, "", ""); err != nil {
-					log.Printf("chat: clear pending failed session=%s: %v", sessionID, err)
-				}
-				journal.Finish(agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData})
+				journal.Finish(
+					agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData},
+					agentclient.TurnEvent{Type: agentclient.EventTypeStreamEnd, Data: map[string]any{"session_id": sessionID}},
+				)
 			}
 
 			evCh, err := client.RunTurn(ctx, agentclient.TurnRequest{

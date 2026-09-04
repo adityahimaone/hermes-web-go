@@ -57,15 +57,23 @@ func (j *Journal) Publish(ev agentclient.TurnEvent) Event {
 	return je
 }
 
-func (j *Journal) Finish(ev agentclient.TurnEvent) Event {
+// Finish marks the journal terminal with ev (the canonical done) and then
+// delivers any trailing events (e.g. Python-parity stream_end) to subscribers
+// before closing. Trailing events are journaled so replays stay faithful.
+func (j *Journal) Finish(ev agentclient.TurnEvent, trailing ...agentclient.TurnEvent) Event {
 	j.mu.Lock()
 	if j.terminal {
 		j.mu.Unlock()
 		return Event{}
 	}
-	j.seq++
-	je := Event{Seq: j.seq, Event: ev, At: time.Now()}
-	j.events = append(j.events, je)
+	all := append([]agentclient.TurnEvent{ev}, trailing...)
+	frames := make([]Event, 0, len(all))
+	for _, e := range all {
+		j.seq++
+		je := Event{Seq: j.seq, Event: e, At: time.Now()}
+		j.events = append(j.events, je)
+		frames = append(frames, je)
+	}
 	if j.retain > 0 && len(j.events) > j.retain {
 		j.events = append([]Event(nil), j.events[len(j.events)-j.retain:]...)
 	}
@@ -76,10 +84,12 @@ func (j *Journal) Finish(ev agentclient.TurnEvent) Event {
 	j.terminal = true
 	j.mu.Unlock()
 	for _, ch := range subs {
-		ch <- je
+		for _, je := range frames {
+			ch <- je
+		}
 		close(ch)
 	}
-	return je
+	return frames[0]
 }
 
 func (j *Journal) Subscribe(after uint64) (replay []Event, live <-chan Event, cancel func()) {
