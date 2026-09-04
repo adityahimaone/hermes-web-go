@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -143,21 +144,26 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 				History:   history,
 			})
 			if err != nil {
+				log.Printf("chat: run_turn setup failed session=%s: %v", sessionID, err)
 				journal.Publish(agentclient.TurnEvent{Type: agentclient.EventError, Error: err.Error()})
 				finishTurn("partial")
 				return
 			}
+			log.Printf("chat: run_turn started session=%s stream_tokens_will_log", sessionID)
+			tokenCount := 0
 			// Relay events from the agent into the stream registry channel.
 			for {
 				select {
 				case ev, ok := <-evCh:
 					if !ok {
+						log.Printf("chat: turn finished session=%s tokens=%d", sessionID, tokenCount)
 						finishTurn("")
 						return
 					}
 					// accumulate token/reasoning text before forwarding
 					if ev.Type == agentclient.EventToken {
 						answer.WriteString(ev.Text)
+						tokenCount++
 					} else if ev.Type == agentclient.EventReasoning {
 						reasoning.WriteString(ev.Text)
 					}

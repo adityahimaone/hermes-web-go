@@ -161,11 +161,16 @@ func ImportSession(db *sql.DB, s SessionImport) error {
 // GetSession returns one session row, or sql.ErrNoRows if absent.
 func GetSession(db *sql.DB, id string) (SessionRow, error) {
 	var r SessionRow
-	err := db.QueryRow(`
+	var projectID sql.NullString
+	scanErr := db.QueryRow(`
 		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev, enabled_toolsets, composer_draft
 		FROM sessions WHERE session_id = ?`, id).
-		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft)
-	return r, err
+		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &projectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft)
+	if scanErr != nil {
+		return r, scanErr
+	}
+	r.ProjectID = projectID.String
+	return r, nil
 }
 
 // ListSessions returns sessions ordered by most-recent update, with pagination.
@@ -186,9 +191,11 @@ func ListSessions(db *sql.DB, limit, offset int) ([]SessionRow, error) {
 	var out []SessionRow
 	for rows.Next() {
 		var r SessionRow
-		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &r.ProjectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft); err != nil {
+		var projectID sql.NullString
+		if err := rows.Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &projectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft); err != nil {
 			return nil, err
 		}
+		r.ProjectID = projectID.String
 		out = append(out, r)
 	}
 	return out, rows.Err()
