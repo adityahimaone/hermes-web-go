@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 173 |
+| Native Go `/api/*` endpoints | 172 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -60,7 +60,7 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/transcribe/capability` | `misc_reads.go` |
 | GET | `/api/wiki/status` | `misc_reads.go` |
 | GET | `/api/insights` | `misc_reads.go` |
-| GET | `/api/updates/check` | `misc_reads.go` |
+| GET/POST | `/api/updates/check` | `updates_check.go` (wave 15: real branch check — fetch, behind, compare URL, 10-min cache; POST = force) |
 | GET | `/api/onboarding/status` | `misc_reads.go` |
 | GET | `/api/git-info` | `git_info.go` |
 | POST | `/api/auth/logout` | `misc_wave2.go` |

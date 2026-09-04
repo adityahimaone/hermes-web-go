@@ -207,7 +207,7 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/transcribe/capability":         {http.MethodGet: true},
 	"/api/wiki/status":                   {http.MethodGet: true},
 	"/api/insights":                      {http.MethodGet: true},
-	"/api/updates/check":                 {http.MethodGet: true},
+	"/api/updates/check":                 {http.MethodGet: true, http.MethodPost: true},
 	"/api/onboarding/status":             {http.MethodGet: true},
 	"/api/git-info":                      {http.MethodGet: true},
 }

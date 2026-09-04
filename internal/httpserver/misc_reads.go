@@ -331,7 +331,7 @@ func miscReadsRouter(r chi.Router, db *sql.DB, dataRoot, hermesHome string) {
 	transcribeCapabilityRouter(r)
 	wikiStatusRouter(r, hermesHome)
 	insightsRouter(r, db)
-	updatesCheckRouter(r, dataRoot, hermesHome)
+	registerUpdatesCheckReal(r, dataRoot, hermesHome)
 	onboardingStatusRouter(r, dataRoot, hermesHome)
 	gitInfoRouterMount(r, db)
 }
