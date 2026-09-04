@@ -439,14 +439,6 @@ func ConfigRouter(r chi.Router, hermesHome, dataRoot string) {
 		writeJSON(w, map[string]any{"ok": true, "provider": providerID})
 	})
 
-	r.Get("/api/providers", func(w http.ResponseWriter, req *http.Request) {
-		home := hermesHome
-		if home == "" {
-			home = defaultHermesHome()
-		}
-		writeJSON(w, providersList(home))
-	})
-
 	r.Post("/api/providers/self-hosted", func(w http.ResponseWriter, req *http.Request) {
 		home := hermesHome
 		if home == "" {

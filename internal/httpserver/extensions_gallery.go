@@ -488,24 +488,7 @@ func normalizeLoopbackOrigin(origin string) string {
 
 // Wave17Router mounts the gallery endpoints.
 func Wave17Router(r chi.Router, dataRoot, hermesHome string) {
-	handleBody := func(w http.ResponseWriter, req *http.Request, fn func(map[string]any) (int, map[string]any)) {
-		var body map[string]any
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			wave4WriteJSONErr(w, 400, "invalid request body")
-			return
-		}
-		st, payload := fn(body)
-		wave4WriteJSON(w, st, payload)
-	}
-	r.Post("/api/extensions/install", func(w http.ResponseWriter, req *http.Request) {
-		handleBody(w, req, func(b map[string]any) (int, map[string]any) { return handleExtensionInstall(dataRoot, b) })
-	})
-	r.Post("/api/extensions/uninstall", func(w http.ResponseWriter, req *http.Request) {
-		handleBody(w, req, func(b map[string]any) (int, map[string]any) { return handleExtensionUninstall(dataRoot, b) })
-	})
-	r.Post("/api/extensions/sidecar-proxy-consent", func(w http.ResponseWriter, req *http.Request) {
-		handleBody(w, req, func(b map[string]any) (int, map[string]any) {
-			return handleExtensionSidecarConsent(dataRoot, hermesHome, b)
-		})
-	})
+	// Extension install/uninstall/consent are served by the Python backend via
+	// the legacy proxy (parity with /api/extensions/status + /registry, which
+	// also read agent-side manifest state the Go build does not track).
 }

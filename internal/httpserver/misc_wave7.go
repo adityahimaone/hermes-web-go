@@ -665,21 +665,6 @@ func wave7Router(r chi.Router, db *sql.DB, dataRoot, hermesHome string) {
 		st, payload := handleProjectDelete(dataRoot, body)
 		wave4WriteJSON(w, st, payload)
 	})
-	r.Get("/api/extensions/status", func(w http.ResponseWriter, _ *http.Request) {
-		wave4WriteJSON(w, 200, handleExtensionsStatus(hermesHome))
-	})
-	r.Get("/api/extensions/registry", func(w http.ResponseWriter, _ *http.Request) {
-		wave4WriteJSON(w, 200, handleExtensionsRegistry(hermesHome))
-	})
-	r.Post("/api/extensions/toggle", func(w http.ResponseWriter, req *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			wave4WriteJSONErr(w, 400, "invalid request body")
-			return
-		}
-		st, payload := handleExtensionToggle(hermesHome, body)
-		wave4WriteJSON(w, st, payload)
-	})
 	r.Post("/api/onboarding/complete", func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {

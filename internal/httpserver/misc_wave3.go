@@ -248,18 +248,6 @@ func workspaceFilemapRouter(r chi.Router) {
 
 // pluginsRouter serves GET /api/plugins — degraded empty payload (no Python
 // plugin visibility); matches the Python fallback when plugin load fails.
-func pluginsRouter(r chi.Router) {
-	r.Get("/api/plugins", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{
-			"plugins":         []any{},
-			"empty":           true,
-			"supported_hooks": []string{},
-			"read_only":       true,
-			"unavailable":     true,
-		})
-	})
-}
-
 // wave3Router mounts all Wave-3 read-only endpoints.
 func wave3Router(r chi.Router, dataRoot, hermesHome string) {
 	notesRouter(r)
@@ -268,5 +256,4 @@ func wave3Router(r chi.Router, dataRoot, hermesHome string) {
 	workspaceSuggestRouter(r, dataRoot)
 	workspaceHealthRouter(r, dataRoot)
 	workspaceFilemapRouter(r)
-	pluginsRouter(r)
 }

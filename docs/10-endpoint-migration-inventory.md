@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 198 |
-| **Not yet migrated (proxied to Python)** | **46** |
+| Native Go `/api/*` endpoints | 190 |
+| **Not yet migrated (proxied to Python)** | **54** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -80,7 +80,7 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/workspaces/suggest` | `misc_wave3.go` |
 | GET | `/api/workspaces/health` | `misc_wave3.go` |
 | GET | `/api/workspaces/filemap` | `misc_wave3.go` |
-| GET | `/api/plugins` | `misc_wave3.go` |
+~~| GET | `/api/plugins` | `misc_wave3.go` |~~ (reverted to Python proxy 2026-09-05: agent-coupled plugin discovery)
 | GET | `/api/git/status` | `git_panel.go` |
 | GET | `/api/git/branches` | `git_panel.go` |
 | GET | `/api/git/diff` | `git_panel.go` |
@@ -115,12 +115,12 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/projects/create` | `misc_wave7.go` |
 | POST | `/api/projects/rename` | `misc_wave7.go` |
 | POST | `/api/projects/delete` | `misc_wave7.go` |
-| GET | `/api/extensions/status` | `misc_wave7.go` |
-| GET | `/api/extensions/registry` | `misc_wave7.go` |
-| POST | `/api/extensions/toggle` | `misc_wave7.go` |
-| POST | `/api/extensions/install` | `extensions_gallery.go` (wave 17: sha256 verify, zip-slip guards, install manifest) |
-| POST | `/api/extensions/uninstall` | `extensions_gallery.go` (wave 17: manifest-driven file removal + empty-dir pruning) |
-| POST | `/api/extensions/sidecar-proxy-consent` | `extensions_gallery.go` (wave 17: loopback-origin consent in extension-overrides.json) |
+~~| GET | `/api/extensions/status` | `misc_wave7.go` |~~ (reverted to Python proxy 2026-09-05: wrong-shape stub)
+~~| GET | `/api/extensions/registry` | `misc_wave7.go` |~~ (reverted to Python proxy 2026-09-05: wrong-shape stub)
+~~| POST | `/api/extensions/toggle` | `misc_wave7.go` |~~ (reverted to Python proxy 2026-09-05: reference guards live in Python)
+~~| POST | `/api/extensions/install` | `extensions_gallery.go` (wave 17: sha256 verify, zip-slip guards, install manifest) |~~ (reverted to Python proxy 2026-09-05: reference guards live in Python)
+~~| POST | `/api/extensions/uninstall` | `extensions_gallery.go` (wave 17: manifest-driven file removal + empty-dir pruning) |~~ (reverted to Python proxy 2026-09-05: reference guards live in Python)
+~~| POST | `/api/extensions/sidecar-proxy-consent` | `extensions_gallery.go` (wave 17: loopback-origin consent in extension-overrides.json) |~~ (reverted to Python proxy 2026-09-05: reference guards live in Python)
 | POST | `/api/onboarding/complete` | `misc_wave7.go` |
 | GET | `/api/onboarding/oauth/poll` | `onboarding_oauth.go` (wave 16) |
 | POST | `/api/onboarding/oauth/start` | `onboarding_oauth.go` (wave 16: codex device-code + anthropic Claude Code link) |
@@ -296,3 +296,13 @@ whenever a Go route lands — the inventory script reads the same source.
 3. Add parity tests in the matching `*_test.go` (response shape, status codes, error edges).
 4. Re-run `python3 scripts/endpoint_inventory.py` and update this doc's count/table.
 5. `go test ./... -race`, `go vet ./...`, `go build ./...`.
+
+### Deliberate proxy reversions (2026-09-05)
+
+- `GET /api/providers`: Python `get_providers()` probes hermes_cli auth status,
+  agent plugin-provider discovery (`providers.list_providers()`), and the user's
+  `custom:*` registry. Go's static table returned dummy data. POST set-key stays native.
+- `/api/plugins`: Python enumerates installed agent plugins; the Go stub returned
+  `{"empty":true}` which hid the Settings > Plugins tab (#3457 fallback).
+- `/api/extensions/*`: Go stubs returned wrong shapes (`{enabled:[],disabled:[],total:0}`);
+  Python owns manifest scanning, gallery registry, and install guards.

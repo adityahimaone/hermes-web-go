@@ -1256,14 +1256,10 @@ func TestProvidersList(t *testing.T) {
 	home := t.TempDir()
 	writeHomeFile(t, home, "config.yaml", "model:\n  default: gpt-4o\n  provider: openai\n")
 	writeHomeFile(t, home, ".env", "OPENAI_API_KEY=sk-openai-12345678\n")
-	rr := auxRequest(t, home, http.MethodGet, "/api/providers", "")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("json: %v", err)
-	}
+	// GET /api/providers is served by the Python backend via the legacy proxy
+	// (provider auth probing + plugin discovery are agent-coupled); the Go
+	// providersList aggregation remains for POST set-key flows.
+	resp := providersList(home)
 	list, _ := resp["providers"].([]any)
 	if len(list) < 10 {
 		t.Fatalf("providers len = %d, want many", len(list))
