@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 40 |
-| **Not yet migrated (proxied to Python)** | **189** |
+| Native Go `/api/*` endpoints | 84 |
+| **Not yet migrated (proxied to Python)** | **145** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -45,6 +45,9 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/approval/pending` | `approval.go` |
 | GET | `/api/crons` | `crons.go` |
 | GET | `/api/crons/output` | `crons.go` |
+| GET | `/api/crons/recent` | `crons.go` |
+| GET | `/api/crons/history` | `crons.go` |
+| GET | `/api/crons/status` | `crons.go` |
 | GET | `/api/skills` | `skillsmem.go` |
 | GET | `/api/skills/content` | `skillsmem.go` |
 | GET | `/api/skills/usage` | `skillsmem.go` |
@@ -113,7 +116,7 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 - `/api/onboarding/*`
 
 ### Cron admin (read-side / extra)
-- `/api/crons/history`, `/api/crons/recent`, `/api/crons/status`, `/api/crons/delivery-options` (delivery-options is native)
+- ~~`/api/crons/history`, `/api/crons/recent`, `/api/crons/status`~~ — migrated to native Go 2026-09-04 (`crons.go`: Recent/History/Status; `Recent` mirrors jobs.json filter, `History` lists output-file metadata); `native=84` per `scripts/endpoint_inventory.py`
 
 ### Skills / memory extras
 _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles

@@ -250,10 +250,17 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       process, same seam as chat — do not reimplement cron scheduling logic in Go).
       Partial: `internal/crons` now reads file-backed `jobs.json`/output safely because the current
       agent exposes no cron HTTP mutation endpoints; scheduler mutations remain proxy-backed.
-- [x] `GET /api/crons`, `/api/crons/output`, `POST /api/crons/run|pause|resume|create`.
-      Partial: GET list/output are native and live-verified (12 jobs from real `~/.hermes/cron/jobs.json`);
-      POST mutations remain proxy-backed until an agent-side scheduler seam exists.
-      Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`.
+- [x] `GET /api/crons`, `/api/crons/output`, `/api/crons/recent`, `/api/crons/history`,
+      `/api/crons/status`, `POST /api/crons/run|pause|resume|create`.
+      GET list/output/recent/history/status are native and live-verified (12 jobs from real
+      `~/.hermes/cron/jobs.json`). `recent` mirrors Python `_handle_cron_recent` (filters
+      `last_run_at > since`, `{completions, since}`); `history` mirrors `_handle_cron_history`
+      (`{job_id, runs[], total, offset}` with `usage:{}` placeholder); `status` reports
+      `running:false` (agent-side `_RUNNING_CRON_JOBS` is process-local, see ponytail in
+      `crons.go`). POST mutations remain proxy-backed until an agent-side scheduler seam exists.
+      Evidence: `TestCronsList`, `TestCronsOutput`, `TestCronsOutputRejectsTraversal`;
+      live curl verified all three new GETs + `/api/logs`. Commits `efc4112` (+logs),
+      crons-recent/history/status in-flight.
 - [x] `internal/skillsmem`: read `SKILL.md` files / skill registry, `MEMORY.md`/`USER.md`/`SOUL.md`.
       Native package supports frontmatter discovery, nested lookup, `.usage.json` telemetry,
       configured `skills.external_dirs`, and memory files. External paths expand `~`/`${VAR}`,

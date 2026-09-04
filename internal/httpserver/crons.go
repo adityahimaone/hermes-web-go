@@ -45,6 +45,45 @@ func CronsRouter(r chi.Router, home string, mut agentclient.CronMutator) {
 		writeJSON(w, map[string]any{"job_id": jobID, "outputs": outputs})
 	})
 
+	// GET /api/crons/recent — poll for recently finished runs (toast source).
+	// `since` epoch seconds; returns only jobs whose last run is newer.
+	r.Get("/api/crons/recent", func(w http.ResponseWriter, r *http.Request) {
+		since := 0.0
+		if raw := r.URL.Query().Get("since"); raw != "" {
+			if f, err := strconv.ParseFloat(raw, 64); err == nil {
+				since = f
+			}
+		}
+		recent, err := crons.Recent(home, since)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read cron jobs")
+			return
+		}
+		writeJSON(w, map[string]any{"completions": recent, "since": since})
+	})
+
+	// GET /api/crons/history — output file metadata list for a job.
+	r.Get("/api/crons/history", func(w http.ResponseWriter, r *http.Request) {
+		jobID := r.URL.Query().Get("job_id")
+		offset, limit := 0, 50
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				offset = n
+			}
+		}
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				limit = n
+			}
+		}
+		items, total, err := crons.History(home, jobID, offset, limit)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"job_id": jobID, "runs": items, "total": total, "offset": offset})
+	})
+
 	// GET /api/crons/run — fetch a specific output file (frontend calls this from output panel)
 	r.Get("/api/crons/run", func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.URL.Query().Get("job_id")
@@ -86,6 +125,19 @@ func CronsRouter(r chi.Router, home string, mut agentclient.CronMutator) {
 			"snippet": snippet,
 			"usage":   nil, // not available from file
 		})
+	})
+
+	// GET /api/crons/status — running status for one or all cron jobs.
+	// Process-local run tracking lives in the agent, so all-jobs view reports
+	// an empty map and single-job reports running=false (ponytail: expose
+	// agent-side _RUNNING_CRON_JOBS via gateway once the cron panel needs it).
+	r.Get("/api/crons/status", func(w http.ResponseWriter, r *http.Request) {
+		jobID := r.URL.Query().Get("job_id")
+		if jobID != "" {
+			writeJSON(w, map[string]any{"job_id": jobID, "running": false, "elapsed": 0.0})
+			return
+		}
+		writeJSON(w, map[string]any{"running": map[string]any{}})
 	})
 
 	// mutations — 503 unless a gateway mutator is wired (proxy-free cutover)
