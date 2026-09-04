@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 161 |
+| Native Go `/api/*` endpoints | 164 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -218,7 +218,8 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 ### Terminal / background / dashboard
 - ~~`/api/terminal/*`~~ (`start`, `input`, `output`, `resize`, `close`) — **implemented** (Wave 9)
 - `/api/background`, `/api/background/status`
-- `/api/bg-task-complete-ack`, `/api/process-complete-ack`
+- `/api/bg-task-complete-ack` — **implemented** (Wave 10)
+- `/api/process-complete-ack` — **implemented** (410 Gone alias, Wave 10)
 - `/api/dashboard/config`, `/api/dashboard/status`, `/api/project-os/dashboard`
 
 ### Projects / workspaces extras
@@ -241,7 +242,8 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 ### Gateway / infra admin
 - `/api/gateway/status`, `/api/gateway/restart`, `/api/gateway/start`, `/api/gateway/stop`
 - `/api/health/restart`, `/api/system/health` (health/agent is native via misc.go, 2026-09-04)
-- `/api/admin/reload`, `/api/shutdown`, `/api/updates/*` (`check`, `summary`, `apply`, `force`, `clear_lock`)
+- `/api/admin/reload`, `/api/shutdown`, `/api/updates/*` (`check`, `summary`, `apply`, `force`)
+- `/api/updates/clear_lock` — **implemented** (Wave 10, no-delete manual-recovery parity)
 - `/api/csp-report`
 
 ### Extensions / MCP

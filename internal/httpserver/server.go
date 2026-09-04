@@ -192,6 +192,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 		wave7Router(r, db, dataRoot, routerHermesHome(o))
 		TerminalRouter(r, db)
 		wave8Router(r, db, dataRoot, routerHermesHome(o))
+		wave10Router(r, db)
 	gitFamilyRouter(r, db)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
@@ -238,6 +239,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 		wave7Router(r, db, dataRoot, routerHermesHome(o))
 		TerminalRouter(r, db)
 		wave8Router(r, db, dataRoot, routerHermesHome(o))
+		wave10Router(r, db)
 	gitFamilyRouter(r, db)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
