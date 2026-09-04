@@ -2,12 +2,14 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"hermes-web-go/internal/agentclient"
 	"hermes-web-go/internal/approval"
@@ -45,6 +47,7 @@ func TestChatStreamFanout(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The turn may still be draining; retry briefly until the done frame lands.
 	first := fetchStream(t, ts.URL+"/api/chat/stream?stream_id="+startResp.StreamID)
 	second := fetchStream(t, ts.URL+"/api/chat/stream?stream_id="+startResp.StreamID)
 
@@ -109,6 +112,68 @@ func TestChatStreamReplay(t *testing.T) {
 	}
 	if !strings.Contains(replayed, `"text":"beta"`) || !strings.Contains(replayed, "event: done") {
 		t.Fatalf("replay missing remaining events: %q", replayed)
+	}
+}
+
+// TestSessionStreamRecovery ensures /api/session/stream emits initial +
+// on-subscribe self-heal: session-updated when the server is ahead of the
+// tab's known_count (a turn finished during an SSE gap).
+func TestSessionStreamRecovery(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{ID: "ss1", Title: "", Workspace: "/tmp", Model: "codex", Messages: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	// Turn completes with one user + one assistant message (count=2).
+	fake := &fakeClient{
+		started: make(chan TurnRequestCapture, 1),
+		events: []agentclient.TurnEvent{
+			{Type: agentclient.EventToken, Text: "pong"},
+			{Type: agentclient.EventDone},
+		},
+	}
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", bytes.NewBufferString(`{"session_id":"ss1","message":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	// Give the turn goroutine a moment to finish and persist (count=2).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		row, err := store.GetSession(db, "ss1")
+		if err == nil && messageCount(row.Messages) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Simulate a (re)connecting tab that knew only 1 message.
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/session/stream?session_id=ss1&known_count=1", nil)
+	ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.Body.Close()
+	b, _ := io.ReadAll(r2.Body)
+	body := string(b)
+	if !strings.Contains(body, "event: initial") {
+		t.Fatalf("missing initial frame: %q", body)
+	}
+	if !strings.Contains(body, "session-updated") {
+		t.Fatalf("missing session-updated self-heal: %q", body)
+	}
+	if !strings.Contains(body, `"message_count":2`) {
+		t.Fatalf("session-updated missing count: %q", body)
 	}
 }
 

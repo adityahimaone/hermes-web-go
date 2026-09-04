@@ -22,7 +22,7 @@ import (
 // (db) and the agent transport (client). When client is nil the routes are
 // not registered, so the catch-all proxy can keep serving them (Phase 4
 // cutover keeps proxy fallback until the runner is verified live).
-func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client agentclient.AgentClient, st *approval.Store) {
+func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client agentclient.AgentClient, st *approval.Store, sessStreams *sessionStreamState) {
 	if db == nil || reg == nil || client == nil {
 		return
 	}
@@ -80,6 +80,9 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		// Create the stream before spawning the turn so the SSE endpoint can
 		// attach even if the agent returns instantly.
 		streamID, journal := reg.Create(256)
+		if sessStreams != nil {
+			sessStreams.Set(sessionID, streamID)
+		}
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {

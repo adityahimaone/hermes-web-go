@@ -159,6 +159,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 		fn(&o)
 	}
 	reg := stream.NewJournalRegistry()
+	sessStreams := newSessionStreamState()
 
 	r := chi.NewRouter()
 	r.Use(Recover)
@@ -171,7 +172,8 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 		DataRouter(r, db, dataRoot)
 		SessionFamilyRouter(r, db, reg)
 	}
-	ChatRouter(r, db, reg, client, st)
+	ChatRouter(r, db, reg, client, st, sessStreams)
+	SessionStreamRouter(r, db, reg, sessStreams)
 	if st != nil {
 		ApprovalRouter(r, st)
 	}
