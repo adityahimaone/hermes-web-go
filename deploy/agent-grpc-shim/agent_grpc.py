@@ -28,7 +28,7 @@ SOCKET_PATH = os.environ.get("HERMES_WEBUI_AGENT_SOCKET", os.path.expanduser("~/
 API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 
 
-def _translate(pl, fallback_event, last_delta=None):
+def _translate(pl, fallback_event, last_delta=None, answer_acc=""):
     """Map gateway SSE payload -> (type, text, name, preview) for Go."""
     et = pl.get("event", "") or fallback_event or ""
     if et == "message.delta":
@@ -40,8 +40,9 @@ def _translate(pl, fallback_event, last_delta=None):
         # BUT this gateway sometimes echoes the final answer text back as
         # reasoning.available (e.g. "`Fri Sep 4 ...`" or "adityahimawan"),
         # which made the Thinking card flash then vanish on done.
-        # Gate: forward unless the text is a backtick-wrapped short span or
-        # equals the last emitted message.delta (answer echo).
+        # Gate: forward unless the text is a backtick-wrapped short span,
+        # equals the last emitted message.delta, or equals the FULL
+        # accumulated answer (echo arrives after all tokens).
         t = pl.get("text", "") or pl.get("delta", "") or pl.get("content", "") or ""
         stripped = t.strip()
         if not stripped:
@@ -49,8 +50,14 @@ def _translate(pl, fallback_event, last_delta=None):
         if stripped.startswith("`") and stripped.endswith("`") and len(stripped.strip("`").strip()) < 160:
             # backtick-wrapped short span = command output / answer echo
             return "", "", "", ""
-        if last_delta is not None and t.strip() == str(last_delta).strip():
+        if last_delta is not None and stripped == str(last_delta).strip():
             # exact duplicate of a just-seen message.delta (answer echo)
+            return "", "", "", ""
+        if answer_acc and len(stripped) > 15 and stripped in answer_acc.strip():
+            # prefix/substring of accumulated answer echo (arrives after token burst)
+            return "", "", "", ""
+        if answer_acc and len(answer_acc.strip()) > 15 and answer_acc.strip() in stripped:
+            # answer is substring of reasoning (rare echo wrapping)
             return "", "", "", ""
         return "reasoning", t, "", ""
     if et in ("tool", "tool.started"):
@@ -111,6 +118,7 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
             return
 
         last_delta = None
+        answer_acc = ""
         async with self._http.stream("GET", f"/v1/runs/{run_id}/events") as stream:
             if stream.status_code // 100 != 2:
                 context.set_code(grpc.StatusCode.INTERNAL)
@@ -136,9 +144,10 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
                     except Exception:
                         pl = {}
                     if isinstance(pl, dict):
-                        etype, text, name, preview = _translate(pl, event_type, last_delta)
+                        etype, text, name, preview = _translate(pl, event_type, last_delta, answer_acc)
                         if etype == "token" and text:
                             last_delta = text
+                            answer_acc += text
                         # skip empty passthrough that would spam unknown
                         if not etype:
                             event_type = ""
