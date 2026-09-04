@@ -122,26 +122,28 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		}
 	}
 	if cfg.AgentBaseURL == "" {
-		// No HTTP runner configured. If the agent gRPC socket is present
-		// (hermes gateway/agent_grpc shim running), still use the agent
-		// router so chat/approval/clarify work natively. Otherwise fall
-		// back to the data-only router (chat proxied if LegacyProxyURL set,
-		// else 404).
+		// No HTTP runner configured. Prefer gRPC socket when available, but
+		// always mount native chat/session-stream routes so the frontend
+		// gets a proper 500/error bubble instead of 404 "page not found"
+		// which it treats as "session deleted" and clears S.session to
+		// empty state (looks like "kelempar ke new chat").
 		socket := cfg.AgentSocket
 		if socket == "" {
 			socket = filepath.Join(cfg.DataRoot, "agent.sock")
 		}
+		httpFallback := agentclient.NewHTTPClient("", "")
 		client, err := agentclient.NewBestClient(context.Background(), agentclient.TransportConfig{
 			Mode:       agentclient.TransportGRPC,
 			SocketPath: socket,
-		}, agentclient.NewHTTPClient("", ""))
+		}, httpFallback)
 		if err == nil {
 			log.Printf("agent transport: using gRPC socket %s (no runner base URL)", socket)
 			approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
 			return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, client, approvalStore, opts...)
 		}
-		log.Printf("agent transport: gRPC socket %s unavailable (%v); data-only router", socket, err)
-		return httpserver.NewRouterWithData(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, opts...)
+		log.Printf("agent transport: gRPC socket %s unavailable (%v); chat routes use HTTP fallback (will error until agent available)", socket, err)
+		approvalStore := approval.NewStoreP(approval.NewSQLitePersistence(db))
+		return httpserver.NewRouterWithAgent(cfg.StaticDir, proxyHandler, db, cfg.DataRoot, httpFallback, approvalStore, opts...)
 	}
 	httpFallback := agentclient.NewHTTPClient(cfg.AgentBaseURL, cfg.AgentAPIKey)
 	opts = append(opts, httpserver.WithCronMutator(httpFallback))

@@ -65,7 +65,8 @@ func NewBestClient(ctx context.Context, cfg TransportConfig, fallback *HTTPClien
 	case TransportGRPC:
 		conn, err := probeGRPC(ctx, cfg.SocketPath, timeout)
 		if err != nil {
-			return nil, fmt.Errorf("agent transport: grpc forced but unavailable: %w", err)
+			log.Printf("agent transport: grpc forced but unavailable: %v (using HTTP fallback)", err)
+			return fallback, nil
 		}
 		return NewGRPCClient(conn, fallback), nil
 	case TransportAuto, "":

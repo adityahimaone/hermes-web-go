@@ -98,9 +98,12 @@ func TestNewBestClient_NoSocketFallsBackToHTTP(t *testing.T) {
 
 func TestNewBestClient_ForcedGRPCUnavailableErrors(t *testing.T) {
 	cfg := TransportConfig{Mode: TransportGRPC, SocketPath: "/tmp/does-not-exist.sock"}
-	_, err := NewBestClient(context.Background(), cfg, fakeHTTPFallback(t))
-	if err == nil {
-		t.Fatal("expected error when grpc is forced but socket is unavailable")
+	client, err := NewBestClient(context.Background(), cfg, fakeHTTPFallback(t))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := client.(*HTTPClient); !ok {
+		t.Fatalf("expected HTTPClient fallback when grpc forced but unavailable, got %T", client)
 	}
 }
 
