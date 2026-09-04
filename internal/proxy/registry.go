@@ -117,6 +117,12 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/client-events/log":             {http.MethodPost: true},
 	"/api/session/compress/status":       {http.MethodGet: true},
 	"/api/health/agent":                  {http.MethodGet: true},
+	"/api/transcribe/capability":         {http.MethodGet: true},
+	"/api/wiki/status":                   {http.MethodGet: true},
+	"/api/insights":                      {http.MethodGet: true},
+	"/api/updates/check":                 {http.MethodGet: true},
+	"/api/onboarding/status":             {http.MethodGet: true},
+	"/api/git-info":                      {http.MethodGet: true},
 }
 
 func IsNativeMethod(method, path string) bool {
@@ -182,6 +188,12 @@ var NativeRoutes = map[string]bool{
 	"/api/client-events/log":             true,
 	"/api/session/compress/status":       true,
 	"/api/health/agent":                  true,
+	"/api/transcribe/capability":         true,
+	"/api/wiki/status":                   true,
+	"/api/insights":                      true,
+	"/api/updates/check":                 true,
+	"/api/onboarding/status":             true,
+	"/api/git-info":                      true,
 	"/api/profile/active":                true,
 	"/api/profiles":                      true,
 	"/api/settings":                      true,

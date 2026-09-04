@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 87 |
+| Native Go `/api/*` endpoints | 93 |
 | **Not yet migrated (proxied to Python)** | **142** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -57,6 +57,12 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/client-events/log` | `misc.go` |
 | GET | `/api/session/compress/status` | `misc.go` |
 | GET | `/api/health/agent` | `misc.go` |
+| GET | `/api/transcribe/capability` | `misc_reads.go` |
+| GET | `/api/wiki/status` | `misc_reads.go` |
+| GET | `/api/insights` | `misc_reads.go` |
+| GET | `/api/updates/check` | `misc_reads.go` |
+| GET | `/api/onboarding/status` | `misc_reads.go` |
+| GET | `/api/git-info` | `git_info.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |

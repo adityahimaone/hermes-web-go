@@ -183,6 +183,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	ConfigRouter(r, routerHermesHome(o), dataRoot)
 	LogsRouter(r, routerHermesHome(o))
 	miscRouter(r, routerHermesHome(o))
+	miscReadsRouter(r, db, dataRoot, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
@@ -220,6 +221,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	ConfigRouter(r, routerHermesHome(o), dataRoot)
 	LogsRouter(r, routerHermesHome(o))
 	miscRouter(r, routerHermesHome(o))
+	miscReadsRouter(r, db, dataRoot, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
@@ -261,7 +263,33 @@ func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handl
 		static.ServeHTTP(w, clone)
 	}
 	r.Get("/", serveShell)
-	r.Get("/session/{id}", serveShell)
+	// chi `{id}` routes don't span segments, so one `/session/*` catch-all
+	// serves both the app shell and its relative asset URLs. Asset paths
+	// (`/session/{id}/static/<file>` and `/session/static/<file>`) are
+	// rewritten to `/static/<file>` and served from staticDir; everything
+	// else serves the shell (Python parity: /session/{id}).
+	sessionAssets := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asset := strings.TrimPrefix(r.URL.Path, "/session")
+		// asset looks like /{id}/static/... or /static/... — collapse to
+		// /static/<file> so FileServer(staticDir) resolves correctly.
+		if i := strings.Index(asset, "/static/"); i >= 0 {
+			asset = "/static/" + asset[i+len("/static/"):]
+		}
+		clone := r.Clone(r.Context())
+		clone.URL.Path = asset
+		static.ServeHTTP(w, clone)
+	})
+	r.Get("/session/*", func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/session")
+		if rest == "/static" || strings.HasPrefix(rest, "/static/") || strings.Contains(rest, "/static/") {
+			sessionAssets.ServeHTTP(w, r)
+			return
+		}
+		serveShell(w, r)
+	})
+	// /session/static/* (no id segment) — exact-path match wins over the
+	// catch-all's asset sniffing.
+	r.Get("/session/static/*", sessionAssets)
 	r.Get("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(staticDir, "manifest.json"))
 	})
