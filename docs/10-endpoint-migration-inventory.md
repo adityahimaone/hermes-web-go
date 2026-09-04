@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 86 |
-| **Not yet migrated (proxied to Python)** | **143** |
+| Native Go `/api/*` endpoints | 87 |
+| **Not yet migrated (proxied to Python)** | **142** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -56,6 +56,7 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/logs` | `logs_route.go` |
 | POST | `/api/client-events/log` | `misc.go` |
 | GET | `/api/session/compress/status` | `misc.go` |
+| GET | `/api/health/agent` | `misc.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
@@ -117,10 +118,9 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 - `/api/profile/*` (`active`, `create`, `delete`, `switch`, `update`), `/api/profiles`
 - `/api/onboarding/*`
 - Deferred (native wave after this one): `/api/git-info`, `/api/updates/check`,
-  `/api/health/agent`, `/api/transcribe/capability` — each depends on Python
-  helper modules (workspace git, update cache, gateway probe, STT) and is
-  deferred rather than half-stubbed; documented here so inventory doesn't
-  regress.
+  `/api/transcribe/capability` — each depends on Python helper modules
+  (workspace git, update cache, STT) and is deferred rather than half-stubbed;
+  documented here so inventory doesn't regress.
 
 ### Cron admin (read-side / extra)
 - ~~`/api/crons/history`, `/api/crons/recent`, `/api/crons/status`~~ — migrated to native Go 2026-09-04 (`crons.go`: Recent/History/Status; `Recent` mirrors jobs.json filter, `History` lists output-file metadata); `native=86` per `scripts/endpoint_inventory.py` (with `logs` + `compress/status` + `client-events/log` added this wave), plus `/api/logs` earlier
@@ -163,7 +163,7 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 
 ### Gateway / infra admin
 - `/api/gateway/status`, `/api/gateway/restart`, `/api/gateway/start`, `/api/gateway/stop`
-- `/api/health/agent`, `/api/health/restart`, `/api/system/health`
+- `/api/health/restart`, `/api/system/health` (health/agent is native via misc.go, 2026-09-04)
 - `/api/admin/reload`, `/api/shutdown`, `/api/updates/*` (`check`, `summary`, `apply`, `force`, `clear_lock`)
 - `/api/csp-report`
 
