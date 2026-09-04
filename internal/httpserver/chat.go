@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -200,9 +201,12 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		}()
 
 		writeJSON(w, map[string]any{
-			"stream_id":  streamID,
-			"session_id": sessionID,
-		})
+				"stream_id":          streamID,
+				"session_id":         sessionID,
+				"pending_started_at": float64(time.Now().UnixNano()) / 1e9,
+				"turn_id":            streamID,
+				"title":              row.Title,
+			})
 	})
 
 	r.Get("/api/chat/stream", func(w http.ResponseWriter, req *http.Request) {
