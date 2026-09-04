@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 165 |
+| Native Go `/api/*` endpoints | 161 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -216,7 +216,7 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 - `/api/prompts`, `/api/settings`, `/api/plugins`
 
 ### Terminal / background / dashboard
-- `/api/terminal/*` (`start`, `input`, `output`, `resize`, `close`)
+- ~~`/api/terminal/*`~~ (`start`, `input`, `output`, `resize`, `close`) — **implemented** (Wave 9)
 - `/api/background`, `/api/background/status`
 - `/api/bg-task-complete-ack`, `/api/process-complete-ack`
 - `/api/dashboard/config`, `/api/dashboard/status`, `/api/project-os/dashboard`
