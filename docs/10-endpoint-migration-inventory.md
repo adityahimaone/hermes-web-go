@@ -50,6 +50,7 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/skills/usage` | `skillsmem.go` |
 | GET | `/api/memory` | `skillsmem.go` |
 | GET | `/api/auth/status` | `auth.go` |
+| GET | `/api/logs` | `logs_route.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
@@ -115,8 +116,10 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 - `/api/crons/history`, `/api/crons/recent`, `/api/crons/status`, `/api/crons/delivery-options` (delivery-options is native)
 
 ### Skills / memory extras
-- `/api/skills/delete`, `/api/skills/save`, `/api/skills/toggle`
-- `/api/memory/write`
+_Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
+`/api/skills/{list,content,usage,save,delete,toggle}` and `/api/memory/{read,write}`
+(`GET /api/memory` was already native)._
+- remaining read extras: `/api/skills/usage` history detail (already native), legacy alias `/api/skills/list` (covered by `/api/skills`)
 
 ### Models / providers / settings
 - `/api/models`, `/api/models/live`, `/api/models/refresh`

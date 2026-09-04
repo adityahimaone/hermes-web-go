@@ -162,6 +162,29 @@ Phase 0 evidence: `testdata/route-inventory.json`, `tools/phase0_harness.py`, `t
       extra soak time (run both old and new in shadow/compare mode if feasible before fully cutting).
       **`httpClient` is the only transport in play at this point — ship and soak this before touching 4b.**
 
+### Chat flow / loading-state parity (2026-09-04)
+
+- **[x] Done/timing parity:** `_turnDuration`, `_firstTokenMs`, `_turnTps`, `_usedModel`
+      persisted on the assistant message (was only ever in the stream JSON, never the
+      stored message). Appended the user message before dispatch; forward ordered history.
+      Verified e2e (`_turnDuration: 9.647`, `_turnTps: 0.41`, `_firstTokenMs: 9600`).
+      Commits `6d28a5a`, `e0394aa`.
+- **[x] In-flight (loading) state parity:** Go never persisted the busy-turn marker, so
+      `/api/session` returned `active_stream_id: nil` during a run and the FE could not
+      render the loading spinner / pause / stop affordance, and could not rehydrate it
+      after a reload. Fix:
+  - schema + `migratePendingColumns` add `pending_started_at REAL`,
+    `active_stream_id`, `pending_user_message` (migrates existing DBs);
+  - `/api/chat/start` persists them at turn start; `finishTurn` clears on all exit paths;
+  - `sessionResponse` / `GET /api/session` include `pending_*` only while a run is in flight
+    (`PendingStartedAt > 0`), omit when idle;
+  - clear path writes `''`/`0` not `NULL` — migrated columns are `NOT NULL DEFAULT ''`, so
+    `NULL` writes raised an IntegrityError that was (before) silently swallowed.
+  Verified e2e: GET during-turn carries the pending keys, after completion they are gone.
+- **[ ] Reasoning-echo gating edge (shim):** exact full-answer echo under the substring gate
+      now dropped in `agent_grpc.py` shim v0.4 (short exact echo == answer). Sync shim to
+      `deploy/agent-grpc-shim/` on any hermes-agent `git pull` (file can vanish).
+
 ### 4b. Add the fast path on top, with zero risk to 4a (follow-up within Phase 4)
 
 - [x] Hermes-side: `gateway/platforms/agent_grpc.py` wraps existing `/v1/runs` HTTP API with
