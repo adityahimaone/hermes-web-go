@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 124 |
-| **Not yet migrated (proxied to Python)** | **105** |
+| Native Go `/api/*` endpoints | 132 |
+| **Not yet migrated (proxied to Python)** | **97** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -94,6 +94,14 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/git/push` | `git_panel.go` |
 | POST | `/api/git/checkout` | `git_panel.go` |
 | POST | `/api/git/stash-checkout` | `git_panel.go` |
+| GET | `/api/system/health` | `misc_wave4.go` |
+| POST | `/api/session/branch` | `misc_wave4.go` |
+| POST | `/api/session/compress/start` | `misc_wave4.go` |
+| POST | `/api/admin/reload` | `misc_wave4.go` |
+| POST | `/api/shutdown` | `misc_wave4.go` |
+| POST | `/api/upload/extract` | `misc_wave4.go` |
+| GET | `/api/mcp/servers` | `misc_wave4.go` |
+| GET | `/api/mcp/tools` | `misc_wave4.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
