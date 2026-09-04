@@ -28,19 +28,31 @@ SOCKET_PATH = os.environ.get("HERMES_WEBUI_AGENT_SOCKET", os.path.expanduser("~/
 API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 
 
-def _translate(pl, fallback_event):
+def _translate(pl, fallback_event, last_delta=None):
     """Map gateway SSE payload -> (type, text, name, preview) for Go."""
     et = pl.get("event", "") or fallback_event or ""
     if et == "message.delta":
         t = pl.get("delta", "") or pl.get("text", "") or ""
         return "token", t, "", ""
     if et in ("reasoning", "reasoning.available"):
-        # gateway's reasoning.available for this model is an echo of the final
-        # answer (real chain-of-thought is not exposed through /v1/runs). Emitting
-        # it as `reasoning` makes the Thinking card flash for ~30ms then vanish on
-        # `done`. Drop it entirely: live activity stays visible via
-        # tool.started/tool.completed rows, which is the real progress signal.
-        return "", "", "", ""
+        # Real chain-of-thought from the model (e.g. "User pokemon... no.
+        # Vice president. Whatever.") is worth showing in the Thinking card.
+        # BUT this gateway sometimes echoes the final answer text back as
+        # reasoning.available (e.g. "`Fri Sep 4 ...`" or "adityahimawan"),
+        # which made the Thinking card flash then vanish on done.
+        # Gate: forward unless the text is a backtick-wrapped short span or
+        # equals the last emitted message.delta (answer echo).
+        t = pl.get("text", "") or pl.get("delta", "") or pl.get("content", "") or ""
+        stripped = t.strip().strip("`").strip()
+        if not stripped:
+            return "", "", "", ""
+        if t.strip().startswith("`") and t.strip().endswith("`") and len(stripped) < 160:
+            # backtick code-span echo of a command output / answer
+            return "", "", "", ""
+        if last_delta is not None and t.strip() == str(last_delta).strip():
+            # exact duplicate of a just-seen message.delta (answer echo)
+            return "", "", "", ""
+        return "reasoning", t, "", ""
     if et in ("tool", "tool.started"):
         # gateway sends {"tool":"terminal","preview":"date"} not {"name":...}
         name = pl.get("tool", "") or pl.get("name", "")
@@ -98,6 +110,7 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
             context.set_details(f"agent grpc shim: missing run_id: {resp.text[:400]}")
             return
 
+        last_delta = None
         async with self._http.stream("GET", f"/v1/runs/{run_id}/events") as stream:
             if stream.status_code // 100 != 2:
                 context.set_code(grpc.StatusCode.INTERNAL)
@@ -123,7 +136,9 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
                     except Exception:
                         pl = {}
                     if isinstance(pl, dict):
-                        etype, text, name, preview = _translate(pl, event_type)
+                        etype, text, name, preview = _translate(pl, event_type, last_delta)
+                        if etype == "token" and text:
+                            last_delta = text
                         # skip empty passthrough that would spam unknown
                         if not etype:
                             event_type = ""
