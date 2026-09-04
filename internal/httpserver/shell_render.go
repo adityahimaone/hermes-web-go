@@ -19,17 +19,37 @@ import (
 )
 
 // webuiVersion mirrors api/updates.py _detect_webui_version(): git describe,
-// falling back to the short sha, then "dev".
+// falling back to the short sha, then "dev". Like Python (which computes
+// WEBUI_VERSION once at import), the value is process-constant: resolved on
+// first use via sync.Once against the directory of the running binary (the
+// repo root in dev; a deploy checkout in prod). Resolving per request with
+// cmd.Dir=dataRoot walked UP into unrelated repos (e.g. a HOME dotfiles repo)
+// and let the shell banner's client/server versions drift apart.
+var (
+	webuiVersionOnce   sync.Once
+	webuiVersionCached string
+)
+
 func webuiVersion(staticDir string) string {
+	webuiVersionOnce.Do(func() {
+		webuiVersionCached = detectWebUIVersion(staticDir)
+	})
+	return webuiVersionCached
+}
+
+func detectWebUIVersion(dir string) string {
 	if v := strings.TrimSpace(os.Getenv("HERMES_WEBUI_VERSION")); v != "" {
 		return v
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir = filepath.Dir(exe)
 	}
 	for _, args := range [][]string{
 		{"git", "describe", "--tags", "--always", "--dirty"},
 		{"git", "rev-parse", "--short", "HEAD"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = staticDir
+		cmd.Dir = dir
 		if out, err := cmd.Output(); err == nil {
 			if v := strings.TrimSpace(string(out)); v != "" {
 				return v
