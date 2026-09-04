@@ -43,11 +43,11 @@ def _translate(pl, fallback_event, last_delta=None):
         # Gate: forward unless the text is a backtick-wrapped short span or
         # equals the last emitted message.delta (answer echo).
         t = pl.get("text", "") or pl.get("delta", "") or pl.get("content", "") or ""
-        stripped = t.strip().strip("`").strip()
+        stripped = t.strip()
         if not stripped:
             return "", "", "", ""
-        if t.strip().startswith("`") and t.strip().endswith("`") and len(stripped) < 160:
-            # backtick code-span echo of a command output / answer
+        if stripped.startswith("`") and stripped.endswith("`") and len(stripped.strip("`").strip()) < 160:
+            # backtick-wrapped short span = command output / answer echo
             return "", "", "", ""
         if last_delta is not None and t.strip() == str(last_delta).strip():
             # exact duplicate of a just-seen message.delta (answer echo)
