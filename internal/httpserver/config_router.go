@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -757,7 +758,31 @@ func loadWebUISettings(dataRoot, home string) map[string]any {
 			settings["default_model_provider"] = provider
 		}
 	}
+	// Running versions for the System section badge (Python parity: routes.py
+	// 13383-13384 inject webui_version / agent_version at import time).
+	settings["webui_version"] = webuiVersion(dataRoot)
+	settings["agent_version"] = detectAgentVersion()
 	return settings
+}
+
+// detectAgentVersion mirrors api/updates.py _detect_agent_version(): VERSION
+// file in the agent checkout, then git describe, then "not detected".
+// ponytail: gateway-health probe fallback skipped — needs gateway base URL
+// plumbing; add if VERSION-less Docker deploys become the norm here.
+func detectAgentVersion() string {
+	if dir := agentRepoRoot(); dir != "" {
+		if b, err := os.ReadFile(filepath.Join(dir, "VERSION")); err == nil {
+			if v := strings.TrimSpace(string(b)); v != "" {
+				return v
+			}
+		}
+		if out, err := exec.Command("git", "-C", dir, "describe", "--tags", "--always", "--dirty").Output(); err == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				return v
+			}
+		}
+	}
+	return "not detected"
 }
 
 // readRawSettings loads dataRoot/settings.json into a map; {} when missing or
