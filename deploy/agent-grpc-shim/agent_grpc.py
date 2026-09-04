@@ -9,8 +9,6 @@ import pathlib
 import grpc
 import httpx
 
-# Load proto stubs directly by file path to avoid shadowing the pip `proto`
-# package (site-packages/proto). The stubs live at ~/.hermes/hermes-agent/proto/.
 _hermes_root = pathlib.Path(__file__).resolve().parents[2]
 _proto_dir = _hermes_root / "proto"
 
@@ -30,6 +28,31 @@ SOCKET_PATH = os.environ.get("HERMES_WEBUI_AGENT_SOCKET", os.path.expanduser("~/
 API_SERVER_KEY = os.environ.get("API_SERVER_KEY", "")
 
 
+def _translate(pl, fallback_event):
+    """Map gateway SSE payload -> (type, text, name, preview) for Go."""
+    et = pl.get("event", "") or fallback_event or ""
+    if et == "message.delta":
+        t = pl.get("delta", "") or pl.get("text", "") or ""
+        return "token", t, "", ""
+    if et in ("reasoning", "reasoning.available"):
+        t = pl.get("text", "") or pl.get("delta", "") or pl.get("content", "") or ""
+        return "reasoning", t, "", ""
+    if et in ("tool", "tool.started"):
+        return "tool", "", pl.get("name", ""), pl.get("preview", "")
+    if et in ("tool_complete", "tool.completed"):
+        return "tool_complete", "", pl.get("name", ""), pl.get("preview", "")
+    if et == "interim_assistant":
+        return "interim_assistant", pl.get("text", "") or "", "", ""
+    if et == "run.completed":
+        # gateway does not emit done; treat as done for Go so finishTurn fires
+        # but also keep payload for debugging
+        return "done", "", "", ""
+    if et in ("done", "error", "run.failed", "approval"):
+        return et, pl.get("text", "") or "", pl.get("name", ""), pl.get("preview", "")
+    # passthrough for metering/context_status/title/todo_state/etc.
+    return et, pl.get("text", "") or "", pl.get("name", ""), pl.get("preview", "")
+
+
 class AgentServicer(agent_pb2_grpc.AgentServicer):
     def __init__(self):
         headers = {"Authorization": "Bearer " + API_SERVER_KEY} if API_SERVER_KEY else {}
@@ -39,17 +62,22 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
         return agent_pb2.PingResponse(version="hermes-agent-grpc-shim/0.2")
 
     async def RunTurn(self, request, context):
+        # Gateway /v1/runs expects `input` + `conversation_history` (not `history`)
+        try:
+            hist = json.loads(request.history_json) if request.history_json else []
+        except Exception:
+            hist = []
         payload = {
             "session_id": request.session_id,
             "task_id": request.task_id,
             "message": request.message,
+            "input": request.message,
             "workspace": request.workspace,
             "model": request.model,
             "provider": request.provider,
-            "history": json.loads(request.history_json) if request.history_json else [],
+            "conversation_history": hist,
             "attachments": list(request.attachments),
             "source": "webui",
-            "input": request.message,
         }
         resp = await self._http.post("/v1/runs", json=payload)
         if resp.status_code // 100 != 2:
@@ -88,22 +116,38 @@ class AgentServicer(agent_pb2_grpc.AgentServicer):
                     except Exception:
                         pl = {}
                     if isinstance(pl, dict):
-                        ename = pl.get("event", "") or event_type
-                        text = pl.get("text", "")
-                        name = pl.get("name", "")
-                        preview = pl.get("preview", "")
-                        error = pl.get("error", "")
+                        etype, text, name, preview = _translate(pl, event_type)
+                        # skip empty passthrough that would spam unknown
+                        if not etype:
+                            event_type = ""
+                            continue
+                        # filter empty reasoning with no text (like httpclient does for empty)
+                        if etype == "reasoning" and not text:
+                            event_type = ""
+                            continue
                         yield agent_pb2.TurnEvent(
-                            type=ename,
-                            text=str(text) if text is not None else "",
-                            name=str(name) if name is not None else "",
-                            preview=str(preview) if preview is not None else "",
+                            type=etype,
+                            text=text or "",
+                            name=name or "",
+                            preview=preview or "",
                             data_json=json.dumps(pl, ensure_ascii=False),
-                            error=str(error) if error is not None else "",
+                            error=str(pl.get("error", "")) if pl.get("error") else "",
                         )
-                        if ename in ("done", "error", "run.failed"):
+                        if etype in ("done", "error", "run.failed"):
                             return
                     event_type = ""
+            # Gateway closed stream after run.completed without done; if we already
+            # emitted done above we returned. If stream ended without done (rare),
+            # emit done so Go finishes instead of hanging 20s until EOF timeout.
+            # Check if last emitted was not done — emit synthetic done.
+            yield agent_pb2.TurnEvent(
+                type="done",
+                text="",
+                name="",
+                preview="",
+                data_json=json.dumps({"event": "done", "synthetic": True}, ensure_ascii=False),
+                error="",
+            )
 
     async def Cancel(self, request, context):
         try:

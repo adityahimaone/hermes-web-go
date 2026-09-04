@@ -133,8 +133,9 @@ func buildHandler(cfg config.Config, proxyHandler http.Handler, db *sql.DB) http
 		}
 		httpFallback := agentclient.NewHTTPClient("", "")
 		client, err := agentclient.NewBestClient(context.Background(), agentclient.TransportConfig{
-			Mode:       agentclient.TransportGRPC,
-			SocketPath: socket,
+			Mode:         agentclient.TransportAuto,
+			SocketPath:   socket,
+			ProbeTimeout: 3 * time.Second,
 		}, httpFallback)
 		if err == nil {
 			log.Printf("agent transport: using gRPC socket %s (no runner base URL)", socket)
