@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 168 |
+| Native Go `/api/*` endpoints | 171 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -177,8 +177,8 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
   `move`, `truncate`, `clear`, `draft`, `import`, `import_cli`, `export` (export is native),
   `stream`, `status`, `usage`, `yolo`, `compress*`, `compression-recovery/start`,
   `conversation-rounds`,
-  `anchor-scene`, `title/regenerate`, `toolsets`, `worktree/remove`,
-  `worktree/status`, `sessions/cleanup`, `sessions/cleanup_zero_message`,
+  `anchor-scene`, `title/regenerate`, `toolsets`,
+  `sessions/cleanup`, `sessions/cleanup_zero_message`,
   `sessions/events`, `sessions/gateway/stream`
 
 ### Git & file ops
@@ -248,6 +248,9 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 - `/api/session/recovery/audit` — **implemented** (Wave 11, read-only core audit: shrunken/orphan-bak/index-gaps/missing-sidecars)
 - `/api/session/recovery/repair-safe` — **implemented** (Wave 12: restore-from-bak + sidecar materialization + index rebuild, 409 when not clean)
 - `/api/session/handoff-summary` — **implemented** (Wave 12, deterministic fallback only: no LLM in Go, same fallback text Python uses when its LLM fails; threshold + transcript from state.db)
+- `/api/session/worktree/status` — **implemented** (Wave 13: dirty/untracked/ahead-behind/listed snapshot; terminal lock from native terminal registry)
+- `/api/session/worktree/remove` — **implemented** (Wave 13: dirty/untracked/unpushed guards with force, unlock + git worktree remove)
+- `/api/shutdown` — **already native** (pre-existing registration; Wave 13 verified live: responding + SIGINT)
 - `/api/csp-report`
 
 ### Extensions / MCP
