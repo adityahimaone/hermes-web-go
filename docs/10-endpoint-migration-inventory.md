@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 188 |
-| **Not yet migrated (proxied to Python)** | **56** |
+| Native Go `/api/*` endpoints | 189 |
+| **Not yet migrated (proxied to Python)** | **55** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -246,6 +246,10 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 ### Upload / media extras
 - `/api/upload/extract`
 - `/api/transcribe`, `/api/transcribe/capability`, `/api/tts`
+- `/api/share/create` — **stays proxied (deliberate, Wave 20)**: the snapshot builder embeds the agent's force-redaction engine (`agent/redact.py`, ~1500 lines) as an ALWAYS-ON public-boundary guard plus `MEDIA:` base64 embedding with magic-byte validation and SVG sanitization; half-porting a public security boundary is worse than not porting it
+- ~~`/api/share/revoke`~~ — **implemented** (Wave 20, `share_media.go`: tombstone `shares/<token>.json` (`revoked_at`), token from session sidecar JSON or shares-dir scan by `source_session_id` (CLI-session parity), sidecar fields cleared atomically)
+- `GET /api/share/{token}` — **implemented** (Wave 20, `share_media.go`: public payload projection `title/messages/message_count` + optional epoch `created_at`/`updated_at`, revoked → 404, `Cache-Control: no-store` + `X-Robots-Tag: noindex, nofollow`; dynamic chi route, not counted in the distinct-path registry)
+- `/api/media` — **stays proxied (deliberate, Wave 20)**: coupled to `api/media_snapshots.py` content-addressed digests (`?snap=`), session media tokens, and CSP-sandboxed HTML serving
 
 ### Gateway / infra admin
 - `/api/gateway/status`, `/api/gateway/restart`, `/api/gateway/start`, `/api/gateway/stop`
