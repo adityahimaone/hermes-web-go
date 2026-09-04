@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 176 |
+| Native Go `/api/*` endpoints | 179 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -118,6 +118,9 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/extensions/status` | `misc_wave7.go` |
 | GET | `/api/extensions/registry` | `misc_wave7.go` |
 | POST | `/api/extensions/toggle` | `misc_wave7.go` |
+| POST | `/api/extensions/install` | `extensions_gallery.go` (wave 17: sha256 verify, zip-slip guards, install manifest) |
+| POST | `/api/extensions/uninstall` | `extensions_gallery.go` (wave 17: manifest-driven file removal + empty-dir pruning) |
+| POST | `/api/extensions/sidecar-proxy-consent` | `extensions_gallery.go` (wave 17: loopback-origin consent in extension-overrides.json) |
 | POST | `/api/onboarding/complete` | `misc_wave7.go` |
 | GET | `/api/onboarding/oauth/poll` | `onboarding_oauth.go` (wave 16) |
 | POST | `/api/onboarding/oauth/start` | `onboarding_oauth.go` (wave 16: codex device-code + anthropic Claude Code link) |
@@ -260,7 +263,7 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 - `/api/csp-report`
 
 ### Extensions / MCP
-- `/api/extensions/*` (`install`, `uninstall`, `toggle`, `registry`, `status`, `sidecar-proxy-consent`)
+- `/api/extensions/*` remaining (`registry`/`status`/`toggle` are native in wave7 but with simplified state model; `install` download path only allows hermes-webui.github.io, live-download path not E2E-verified against the real gallery)
 - `/api/mcp/servers`, `/api/mcp/tools`
 
 ### Misc
