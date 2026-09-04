@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 171 |
+| Native Go `/api/*` endpoints | 173 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -174,7 +174,7 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 
 ### Session lifecycle extras
 - `/api/session/*` batch: `branch`, `duplicate`, `retry`, `undo`, `archive`, `pin`,
-  `move`, `truncate`, `clear`, `draft`, `import`, `import_cli`, `export` (export is native),
+  `move`, `truncate`, `clear`, `draft`, `export` (export is native),
   `stream`, `status`, `usage`, `yolo`, `compress*`, `compression-recovery/start`,
   `conversation-rounds`,
   `anchor-scene`, `title/regenerate`, `toolsets`,
@@ -251,6 +251,8 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 - `/api/session/worktree/status` — **implemented** (Wave 13: dirty/untracked/ahead-behind/listed snapshot; terminal lock from native terminal registry)
 - `/api/session/worktree/remove` — **implemented** (Wave 13: dirty/untracked/unpushed guards with force, unlock + git worktree remove)
 - `/api/shutdown` — **already native** (pre-existing registration; Wave 13 verified live: responding + SIGINT)
+- `/api/session/import` — **implemented** (Wave 14: new-session import from JSON export)
+- `/api/session/import_cli` — **implemented** (Wave 14: state.db transcript → WebUI row; refresh path with prefix-equality guard)
 - `/api/csp-report`
 
 ### Extensions / MCP
