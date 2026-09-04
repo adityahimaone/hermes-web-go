@@ -481,22 +481,11 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		if req.URL.Query().Get("messages") == "0" {
 			messages = "[]"
 		}
-		writeJSON(w, map[string]any{
-			"session": map[string]any{
-				"session_id":    row.ID,
-				"title":         title,
-				"workspace":     row.Workspace,
-				"model":         row.Model,
-				"created_at":    row.CreatedAt,
-				"updated_at":    row.UpdatedAt,
-				"pinned":        row.Pinned,
-				"archived":      row.Archived,
-				"project_id":    row.ProjectID,
-				"rev":           row.Rev,
-				"message_count": messageCount(row.Messages),
-				"messages":      json.RawMessage(messages),
-			},
-		})
+		sess := sessionResponse(row)
+		if req.URL.Query().Get("messages") == "0" {
+			sess["messages"] = json.RawMessage(messages)
+		}
+		writeJSON(w, map[string]any{"session": sess})
 	})
 
 	r.Get("/api/sessions/search", func(w http.ResponseWriter, req *http.Request) {
@@ -807,7 +796,7 @@ func sessionResponse(row store.SessionRow) map[string]any {
 		title = title[len("Reply "):]
 	}
 	total, user := messageCounts(row.Messages)
-	return map[string]any{
+	ret := map[string]any{
 		"session_id":         row.ID,
 		"title":              title,
 		"workspace":          row.Workspace,
@@ -822,6 +811,12 @@ func sessionResponse(row store.SessionRow) map[string]any {
 		"user_message_count": user,
 		"messages":           json.RawMessage(row.Messages),
 	}
+	if row.PendingStartedAt > 0 {
+		ret["pending_started_at"] = row.PendingStartedAt
+		ret["active_stream_id"] = row.ActiveStreamID
+		ret["pending_user_message"] = row.PendingUserMessage
+	}
+	return ret
 }
 
 func sessionListItem(row store.SessionRow) map[string]any {

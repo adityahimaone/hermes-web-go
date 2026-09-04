@@ -53,6 +53,12 @@ type SessionRow struct {
 	EnabledToolsets string
 	// ComposerDraft is the per-session composer draft (JSON object or "").
 	ComposerDraft string
+	// PendingStartedAt is unix-epoch seconds a turn began awaiting a run
+	// (nonzero while a run is in flight); ActiveStreamID and PendingUserMessage
+	// describe that in-flight turn. All three are nil when idle.
+	PendingStartedAt   float64
+	ActiveStreamID     string
+	PendingUserMessage string
 }
 
 // Open opens (or creates) the SQLite database and applies the schema.
@@ -84,7 +90,32 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migratePendingColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// migratePendingColumns adds the in-flight turn columns (pending_started_at,
+// active_stream_id, pending_user_message) to databases that predate them.
+func migratePendingColumns(db *sql.DB) error {
+	for _, col := range []string{"pending_started_at", "active_stream_id", "pending_user_message"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='` + col + `'`).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			typ := "TEXT NOT NULL DEFAULT ''"
+			if col == "pending_started_at" {
+				typ = "REAL"
+			}
+			if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN ` + col + ` ` + typ); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func migrateRevColumn(db *sql.DB) error {
@@ -132,7 +163,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   project_id TEXT,
   rev INTEGER NOT NULL DEFAULT 0,
   enabled_toolsets TEXT NOT NULL DEFAULT '',
-  composer_draft TEXT NOT NULL DEFAULT ''
+  composer_draft TEXT NOT NULL DEFAULT '',
+  pending_started_at REAL,
+  active_stream_id TEXT,
+  pending_user_message TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 CREATE TABLE IF NOT EXISTS workspaces (path TEXT PRIMARY KEY, name TEXT);
@@ -162,14 +196,23 @@ func ImportSession(db *sql.DB, s SessionImport) error {
 func GetSession(db *sql.DB, id string) (SessionRow, error) {
 	var r SessionRow
 	var projectID sql.NullString
+	var pendingAt sql.NullFloat64
+	var activeStream sql.NullString
+	var pendingMsg sql.NullString
 	scanErr := db.QueryRow(`
-		SELECT session_id, title, workspace, model, messages, created_at, updated_at, pinned, archived, project_id, rev, enabled_toolsets, composer_draft
+		SELECT session_id, title, workspace, model, messages, created_at, updated_at,
+		       pinned, archived, project_id, rev, enabled_toolsets, composer_draft,
+		       pending_started_at, active_stream_id, pending_user_message
 		FROM sessions WHERE session_id = ?`, id).
-		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &projectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft)
+		Scan(&r.ID, &r.Title, &r.Workspace, &r.Model, &r.Messages, &r.CreatedAt, &r.UpdatedAt, &r.Pinned, &r.Archived, &projectID, &r.Rev, &r.EnabledToolsets, &r.ComposerDraft,
+			&pendingAt, &activeStream, &pendingMsg)
 	if scanErr != nil {
 		return r, scanErr
 	}
 	r.ProjectID = projectID.String
+	r.PendingStartedAt = pendingAt.Float64
+	r.ActiveStreamID = activeStream.String
+	r.PendingUserMessage = pendingMsg.String
 	return r, nil
 }
 
@@ -380,6 +423,23 @@ func UpdateSession(db *sql.DB, id string, u SessionUpdate) error {
 // RenameSession updates the title of a session.
 func RenameSession(db *sql.DB, id, title string) error {
 	_, err := db.Exec(`UPDATE sessions SET title=? WHERE session_id=?`, title, id)
+	return err
+}
+
+// SetSessionPending records the in-flight turn for a session: the run start
+// time (epoch seconds), the active stream id, and the user message text. The
+// frontend derives the loading state (busy composer, elapsed spinner, stop
+// affordance) from these while a run is in progress, exactly as Python does.
+func SetSessionPending(db *sql.DB, id string, startedAt float64, streamID, pendingMsg string) error {
+	if streamID == "" {
+		// Clearing path: run finished (or was interrupted); reset the fields.
+		// Columns are nullable for fresh DBs but '' for migrated ones — set ''
+		// which satisfies both and reads as "no pending turn" everywhere.
+		_, err := db.Exec(`UPDATE sessions SET pending_started_at=0, active_stream_id='', pending_user_message='', updated_at=? WHERE session_id=?`, time.Now().Unix(), id)
+		return err
+	}
+	_, err := db.Exec(`UPDATE sessions SET pending_started_at=?, active_stream_id=?, pending_user_message=?, updated_at=? WHERE session_id=?`,
+		startedAt, streamID, pendingMsg, time.Now().Unix(), id)
 	return err
 }
 

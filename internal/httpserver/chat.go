@@ -84,6 +84,7 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		if sessStreams != nil {
 			sessStreams.Set(sessionID, streamID)
 		}
+		_ = store.SetSessionPending(db, sessionID, float64(time.Now().UnixNano())/1e9, streamID, msg)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
@@ -152,6 +153,11 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 						"message_count": len(messages),
 						"messages":      messages,
 					}}
+				}
+				// Clear in-flight turn marker so the session no longer reports
+				// busy/pending after the run completes or fails.
+				if err := store.SetSessionPending(db, sessionID, 0, "", ""); err != nil {
+					log.Printf("chat: clear pending failed session=%s: %v", sessionID, err)
 				}
 				journal.Finish(agentclient.TurnEvent{Type: agentclient.EventDone, Data: doneData})
 			}
