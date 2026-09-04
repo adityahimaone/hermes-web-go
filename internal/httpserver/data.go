@@ -483,7 +483,15 @@ func DataRouter(r chi.Router, db *sql.DB, dataRoot string) {
 		}
 		sess := sessionResponse(row)
 		if req.URL.Query().Get("messages") == "0" {
-			sess["messages"] = json.RawMessage(messages)
+			sess["messages"] = json.RawMessage("[]")
+		} else if stateRows := readStateDBMessages("", sid); len(stateRows) > 0 {
+			// state.db reconciliation (Python parity): the agent transcript in
+			// state.db carries tool rows + metadata the webui.db projection
+			// lacks. Merge before serving so tool worklogs ("Processed"),
+			// context usage, and busy-state fields render correctly.
+			merged := reconcileSessionMessages(parseSidecarMessages(messages), stateRows)
+			sess["messages"] = merged
+			sess["message_count"] = len(merged)
 		}
 		writeJSON(w, map[string]any{"session": sess})
 	})
