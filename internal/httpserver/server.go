@@ -295,9 +295,10 @@ func mountStaticAndProxy(r chi.Router, staticDir string, proxyHandler http.Handl
 	// root (e.g. "static/style.css" -> "/static/style.css"). Served only for
 	// browsers/GET so the catch-all proxy keeps handling unknown API routes.
 	serveShell := func(w http.ResponseWriter, r *http.Request) {
-		clone := r.Clone(r.Context())
-		clone.URL.Path = "/static/"
-		static.ServeHTTP(w, clone)
+		// Python parity: the shell is index.html with __TOKEN__ substitutions
+		// (version / upload cap / CSRF) — serving the raw file throws
+		// ReferenceError in the browser and breaks the FE config contract.
+		serveShellHTML(w, staticDir)
 	}
 	r.Get("/", serveShell)
 	// chi `{id}` routes don't span segments, so one `/session/*` catch-all

@@ -37,6 +37,14 @@ func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// http.ErrAbortHandler is the net/http contract for "client
+				// went away mid-handler" (ReverseProxy re-panics it when the
+				// upstream/proxied stream aborts). It is not an app error:
+				// re-panic so net/http swallows it silently instead of
+				// spamming stack traces + bogus 500s into the log.
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
 				log.New(logWriter, "", 0).Printf("panic: %v\n%s", rec, debug.Stack())
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
