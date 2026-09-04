@@ -182,6 +182,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	ConversationRoundsRouter(r, routerHermesHome(o))
 	ConfigRouter(r, routerHermesHome(o), dataRoot)
 	LogsRouter(r, routerHermesHome(o))
+	miscRouter(r)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
@@ -218,6 +219,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	ConversationRoundsRouter(r, routerHermesHome(o))
 	ConfigRouter(r, routerHermesHome(o), dataRoot)
 	LogsRouter(r, routerHermesHome(o))
+	miscRouter(r)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}

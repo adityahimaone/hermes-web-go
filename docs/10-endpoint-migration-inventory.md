@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 84 |
-| **Not yet migrated (proxied to Python)** | **145** |
+| Native Go `/api/*` endpoints | 86 |
+| **Not yet migrated (proxied to Python)** | **143** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -54,6 +54,8 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | GET | `/api/memory` | `skillsmem.go` |
 | GET | `/api/auth/status` | `auth.go` |
 | GET | `/api/logs` | `logs_route.go` |
+| POST | `/api/client-events/log` | `misc.go` |
+| GET | `/api/session/compress/status` | `misc.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
@@ -114,9 +116,14 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 - `/api/auth/logout`, `/api/auth/oidc/*`, `/api/auth/passkey*`, `/api/auth/passkeys`
 - `/api/profile/*` (`active`, `create`, `delete`, `switch`, `update`), `/api/profiles`
 - `/api/onboarding/*`
+- Deferred (native wave after this one): `/api/git-info`, `/api/updates/check`,
+  `/api/health/agent`, `/api/transcribe/capability` — each depends on Python
+  helper modules (workspace git, update cache, gateway probe, STT) and is
+  deferred rather than half-stubbed; documented here so inventory doesn't
+  regress.
 
 ### Cron admin (read-side / extra)
-- ~~`/api/crons/history`, `/api/crons/recent`, `/api/crons/status`~~ — migrated to native Go 2026-09-04 (`crons.go`: Recent/History/Status; `Recent` mirrors jobs.json filter, `History` lists output-file metadata); `native=84` per `scripts/endpoint_inventory.py`
+- ~~`/api/crons/history`, `/api/crons/recent`, `/api/crons/status`~~ — migrated to native Go 2026-09-04 (`crons.go`: Recent/History/Status; `Recent` mirrors jobs.json filter, `History` lists output-file metadata); `native=86` per `scripts/endpoint_inventory.py` (with `logs` + `compress/status` + `client-events/log` added this wave), plus `/api/logs` earlier
 
 ### Skills / memory extras
 _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
