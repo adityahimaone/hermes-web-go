@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 138 |
-| **Not yet migrated (proxied to Python)** | **91** |
+| Native Go `/api/*` endpoints | 155 |
+| **Not yet migrated (proxied to Python)** | **74** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -108,6 +108,22 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/session/yolo` | `session_mutations.go` |
 | GET | `/api/session/yolo/status` | `session_mutations.go` |
 | POST | `/api/updates/apply` | `session_mutations.go` |
+| GET | `/api/rollback/list` | `misc_wave7.go` |
+| GET | `/api/rollback/diff` | `misc_wave7.go` |
+| POST | `/api/rollback/restore` | `misc_wave7.go` |
+| POST | `/api/personality/set` | `misc_wave7.go` |
+| POST | `/api/projects/create` | `misc_wave7.go` |
+| POST | `/api/projects/rename` | `misc_wave7.go` |
+| POST | `/api/projects/delete` | `misc_wave7.go` |
+| GET | `/api/extensions/status` | `misc_wave7.go` |
+| GET | `/api/extensions/registry` | `misc_wave7.go` |
+| POST | `/api/extensions/toggle` | `misc_wave7.go` |
+| POST | `/api/onboarding/complete` | `misc_wave7.go` |
+| POST | `/api/session/anchor-scene` | `misc_wave7.go` |
+| POST | `/api/workspaces/reorder` | `misc_wave7.go` |
+| POST | `/api/updates/force` | `misc_wave7.go` |
+| GET | `/api/sessions/events` | `session_events_sse.go` |
+| GET | `/api/sessions/gateway/stream` | `session_events_sse.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |

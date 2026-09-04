@@ -110,17 +110,19 @@ func handleSessionTruncate(db *sql.DB, sid string, mode string) (int, map[string
 	removedCount := len(msgs) - idx
 	removedText := text
 	if mode == "retry" {
-		// keep the user message, drop everything after it
-		if err := updateSessionMessages(db, sid, msgs[:idx+1]); err != nil {
+		// retry: keep the user message, drop everything after it
+			if err := updateSessionMessages(db, sid, msgs[:idx+1]); err != nil {
+				return 500, map[string]any{"error": err.Error()}
+			}
+			publishSessionEvents("session_retry", sid)
+			return 200, map[string]any{"ok": true, "last_user_text": removedText, "removed_count": removedCount - 1}
+		}
+		// undo: drop user msg + everything after
+		if err := updateSessionMessages(db, sid, msgs[:idx]); err != nil {
 			return 500, map[string]any{"error": err.Error()}
 		}
-		return 200, map[string]any{"ok": true, "last_user_text": removedText, "removed_count": removedCount - 1}
-	}
-	// undo: drop user msg + everything after
-	if err := updateSessionMessages(db, sid, msgs[:idx]); err != nil {
-		return 500, map[string]any{"error": err.Error()}
-	}
-	return 200, map[string]any{"ok": true, "removed_count": removedCount, "removed_preview": truncatePreview(removedText)}
+		publishSessionEvents("session_undo", sid)
+		return 200, map[string]any{"ok": true, "removed_count": removedCount, "removed_preview": truncatePreview(removedText)}
 }
 
 // ── rename / title regenerate ──────────────────────────────────────────────

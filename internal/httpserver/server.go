@@ -174,6 +174,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	}
 	ChatRouter(r, db, reg, client, st, sessStreams)
 	SessionStreamRouter(r, db, reg, sessStreams)
+		SessionListEventsRouter(r, dataRoot, routerHermesHome(o))
 	if st != nil {
 		ApprovalRouter(r, st)
 	}
@@ -188,6 +189,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	wave3Router(r, dataRoot, routerHermesHome(o))
 		wave4Router(r, db, dataRoot, "", routerHermesHome(o))
 		wave6Router(r, db)
+		wave7Router(r, db, dataRoot, routerHermesHome(o))
 	gitFamilyRouter(r, db)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
@@ -231,6 +233,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	wave3Router(r, dataRoot, routerHermesHome(o))
 		wave4Router(r, db, dataRoot, "", routerHermesHome(o))
 		wave6Router(r, db)
+		wave7Router(r, db, dataRoot, routerHermesHome(o))
 	gitFamilyRouter(r, db)
 	if o.auth != nil {
 		AuthRouter(r, o.auth)

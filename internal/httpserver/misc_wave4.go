@@ -205,6 +205,7 @@ func handleSessionBranch(db *sql.DB, body branchBody) (int, map[string]any) {
 	if err != nil {
 		return 500, map[string]any{"error": err.Error()}
 	}
+	publishSessionEvents("session_branch", newSid)
 	return 200, map[string]any{
 		"session_id":       newSid,
 		"title":            branchTitle,
