@@ -185,6 +185,7 @@ func NewRouterWithAgent(staticDir string, proxyHandler http.Handler, db *sql.DB,
 	miscRouter(r, routerHermesHome(o))
 	miscReadsRouter(r, db, dataRoot, routerHermesHome(o))
 	wave2Router(r, o.auth, dataRoot, routerHermesHome(o))
+	wave3Router(r, dataRoot, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
@@ -224,6 +225,7 @@ func NewRouterWithData(staticDir string, proxyHandler http.Handler, db *sql.DB, 
 	miscRouter(r, routerHermesHome(o))
 	miscReadsRouter(r, db, dataRoot, routerHermesHome(o))
 	wave2Router(r, o.auth, dataRoot, routerHermesHome(o))
+	wave3Router(r, dataRoot, routerHermesHome(o))
 	if o.auth != nil {
 		AuthRouter(r, o.auth)
 	}
