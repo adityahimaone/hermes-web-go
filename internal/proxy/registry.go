@@ -171,6 +171,7 @@ var NativeMethods = map[string]map[string]bool{
 	"/api/onboarding/oauth/start":    {http.MethodPost: true},
 	"/api/onboarding/oauth/cancel":   {http.MethodPost: true},
 	"/api/onboarding/probe":          {http.MethodPost: true},
+	"/api/onboarding/setup":         {http.MethodPost: true},
 	"/api/session/anchor-scene":      {http.MethodPost: true},
 	"/api/workspaces/reorder":        {http.MethodPost: true},
 	"/api/updates/force":             {http.MethodPost: true},

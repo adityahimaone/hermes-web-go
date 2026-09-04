@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 179 |
+| Native Go `/api/*` endpoints | 180 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -126,6 +126,7 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/onboarding/oauth/start` | `onboarding_oauth.go` (wave 16: codex device-code + anthropic Claude Code link) |
 | POST | `/api/onboarding/oauth/cancel` | `onboarding_oauth.go` (wave 16) |
 | POST | `/api/onboarding/probe` | `onboarding_oauth.go` (wave 16: /models probe, error taxonomy parity) |
+| POST | `/api/onboarding/setup` | `onboarding_setup.go` (wave 18: config.yaml comment-preserving write + .env key, provider matrix, confirm_overwrite guard, SKIP_ONBOARDING short-circuit) |
 | POST | `/api/session/anchor-scene` | `misc_wave7.go` |
 | POST | `/api/workspaces/reorder` | `misc_wave7.go` |
 | POST | `/api/updates/force` | `misc_wave7.go` |
@@ -200,7 +201,7 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 ### Auth / identity
 - `/api/auth/logout`, `/api/auth/oidc/*`, `/api/auth/passkey*`, `/api/auth/passkeys`
 - `/api/profile/*` (`active`, `create`, `delete`, `switch`, `update`), `/api/profiles`
-- `/api/onboarding/oauth/*` remaining (oauth/start codex worker token persistence is partial: writes auth.json entry; setup wizard `apply_onboarding_setup` config.yaml/.env writer stays proxied until ported)
+- `/api/onboarding/oauth/start` codex worker token persistence is partial: writes auth.json entry (subset of Python fields)
 - Deferred (native wave after this one): `/api/git-info`, `/api/updates/check`,
   `/api/transcribe/capability` — each depends on Python helper modules
   (workspace git, update cache, STT) and is deferred rather than half-stubbed;
