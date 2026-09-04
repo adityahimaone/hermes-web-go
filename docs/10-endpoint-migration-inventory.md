@@ -20,7 +20,7 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 164 |
+| Native Go `/api/*` endpoints | 166 |
 | **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
@@ -176,8 +176,8 @@ Remaining Python endpoint families, **highest-value / frontend-visible first**:
 - `/api/session/*` batch: `branch`, `duplicate`, `retry`, `undo`, `archive`, `pin`,
   `move`, `truncate`, `clear`, `draft`, `import`, `import_cli`, `export` (export is native),
   `stream`, `status`, `usage`, `yolo`, `compress*`, `compression-recovery/start`,
-  `recovery/audit`, `recovery/repair-safe`, `conversation-rounds`, `handoff-summary`,
-  `lineage/report`, `anchor-scene`, `title/regenerate`, `toolsets`, `worktree/remove`,
+  `recovery/repair-safe`, `conversation-rounds`, `handoff-summary`,
+  `anchor-scene`, `title/regenerate`, `toolsets`, `worktree/remove`,
   `worktree/status`, `sessions/cleanup`, `sessions/cleanup_zero_message`,
   `sessions/events`, `sessions/gateway/stream`
 
@@ -244,6 +244,8 @@ _Migrated to native on 2026-09-03 (Phase 6): `skillsmem` handles
 - `/api/health/restart`, `/api/system/health` (health/agent is native via misc.go, 2026-09-04)
 - `/api/admin/reload`, `/api/shutdown`, `/api/updates/*` (`check`, `summary`, `apply`, `force`)
 - `/api/updates/clear_lock` — **implemented** (Wave 10, no-delete manual-recovery parity)
+- `/api/session/lineage/report` — **implemented** (Wave 11, continuation-chain walk + child branches from state.db)
+- `/api/session/recovery/audit` — **implemented** (Wave 11, read-only core audit: shrunken/orphan-bak/index-gaps/missing-sidecars)
 - `/api/csp-report`
 
 ### Extensions / MCP
