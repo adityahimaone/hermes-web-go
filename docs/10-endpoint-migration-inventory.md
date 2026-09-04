@@ -20,8 +20,8 @@ python3 scripts/endpoint_inventory.py
 | | Count |
 |---|---|
 | Python `/api/*` endpoints (legacy) | 229 |
-| Native Go `/api/*` endpoints | 155 |
-| **Not yet migrated (proxied to Python)** | **74** |
+| Native Go `/api/*` endpoints | 165 |
+| **Not yet migrated (proxied to Python)** | **64** |
 | Go-only endpoints (no Python equivalence) | `none` |
 
 Every route not listed in the "Native Go" table below is reverse-proxied to the legacy
@@ -124,6 +124,16 @@ Python runner (`HERMES_WEBUI_LEGACY_PROXY_URL`) by the catch-all in
 | POST | `/api/updates/force` | `misc_wave7.go` |
 | GET | `/api/sessions/events` | `session_events_sse.go` |
 | GET | `/api/sessions/gateway/stream` | `session_events_sse.go` |
+| POST | `/api/escape/authorize` | `escape.go` |
+| GET | `/api/escape/list` | `escape.go` |
+| GET | `/api/escape/file/read` | `escape.go` |
+| GET | `/api/escape/file/raw` | `escape.go` |
+| GET | `/api/gateway/status` | `escape.go` |
+| GET | `/api/gateway/start` | `escape.go` |
+| POST | `/api/gateway/stop` | `escape.go` |
+| POST | `/api/gateway/restart` | `escape.go` |
+| POST | `/api/workspace/upload` | `escape.go` |
+| POST | `/api/chat/cancel` | `escape.go` |
 | POST | `/api/session/new` | `data.go` |
 | POST | `/api/session/update` | `data.go` |
 | POST | `/api/session/delete` | `data.go` |
