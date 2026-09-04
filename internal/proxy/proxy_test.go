@@ -19,7 +19,9 @@ func TestIsNative(t *testing.T) {
 	if IsNativeMethod(http.MethodPost, "/health") {
 		t.Fatal("POST /health must remain proxy-owned")
 	}
-	for _, p := range []string{"/static/index.html", "/", "/api/chat", "/api/chat/start"} {
+	// /api/chat + /api/chat/start are native since the Go chat runner landed
+	// (chi routes + NativeMethods/NativeRoutes registration, wave 21 hygiene).
+	for _, p := range []string{"/static/index.html", "/"} {
 		if IsNative(p) {
 			t.Fatalf("%q should not be native", p)
 		}
