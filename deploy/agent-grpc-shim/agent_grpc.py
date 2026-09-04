@@ -53,10 +53,13 @@ def _translate(pl, fallback_event, last_delta=None, answer_acc=""):
         if last_delta is not None and stripped == str(last_delta).strip():
             # exact duplicate of a just-seen message.delta (answer echo)
             return "", "", "", ""
-        if answer_acc and len(stripped) > 15 and stripped in answer_acc.strip():
+        if answer_acc and stripped == answer_acc.strip():
+            # exact full accumulated answer echo
+            return "", "", "", ""
+        if answer_acc and len(stripped) >= 40 and stripped in answer_acc.strip():
             # prefix/substring of accumulated answer echo (arrives after token burst)
             return "", "", "", ""
-        if answer_acc and len(answer_acc.strip()) > 15 and answer_acc.strip() in stripped:
+        if answer_acc and len(answer_acc.strip()) >= 40 and answer_acc.strip() in stripped:
             # answer is substring of reasoning (rare echo wrapping)
             return "", "", "", ""
         return "reasoning", t, "", ""

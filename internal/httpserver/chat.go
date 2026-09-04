@@ -92,6 +92,12 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			var answer strings.Builder
 			var reasoning strings.Builder
 			doneEmitted := false
+			tokenCount := 0
+			// Timing capture (matches Python's _turnDuration/_turnTps/_firstTokenMs
+			// so the UI renders "Processed Xs", chip, first-token latency, model)
+			turnStart := float64(time.Now().UnixNano()) / 1e9
+			var firstTokenAt float64
+			modelUsed := model
 
 			// finishTurn is idempotent: it persists whatever assistant text
 			// accumulated and emits EXACTLY ONE done event. It runs on every
@@ -111,6 +117,17 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 					if status != "" {
 						m["status"] = status
 					}
+					now := float64(time.Now().UnixNano()) / 1e9
+					m["_turnDuration"] = now - turnStart
+					if firstTokenAt > 0 {
+						m["_firstTokenMs"] = (firstTokenAt - turnStart) * 1000.0
+					} else {
+						m["_firstTokenMs"] = nil
+					}
+					if tokenCount > 0 && now > turnStart {
+						m["_turnTps"] = float64(tokenCount) / (now - turnStart)
+					}
+					m["_usedModel"] = modelUsed
 					_ = store.AppendMessage(db, sessionID, m)
 				}
 				// Build session payload for done event (matches Python gateway shape).
@@ -154,7 +171,6 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 				return
 			}
 			log.Printf("chat: run_turn started session=%s stream_tokens_will_log", sessionID)
-			tokenCount := 0
 			// Relay events from the agent into the stream registry channel.
 			for {
 				select {
@@ -168,6 +184,9 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 					if ev.Type == agentclient.EventToken {
 						answer.WriteString(ev.Text)
 						tokenCount++
+						if firstTokenAt == 0 {
+							firstTokenAt = float64(time.Now().UnixNano()) / 1e9
+						}
 					} else if ev.Type == agentclient.EventReasoning {
 						reasoning.WriteString(ev.Text)
 					}
@@ -201,12 +220,12 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		}()
 
 		writeJSON(w, map[string]any{
-				"stream_id":          streamID,
-				"session_id":         sessionID,
-				"pending_started_at": float64(time.Now().UnixNano()) / 1e9,
-				"turn_id":            streamID,
-				"title":              row.Title,
-			})
+			"stream_id":          streamID,
+			"session_id":         sessionID,
+			"pending_started_at": float64(time.Now().UnixNano()) / 1e9,
+			"turn_id":            streamID,
+			"title":              row.Title,
+		})
 	})
 
 	r.Get("/api/chat/stream", func(w http.ResponseWriter, req *http.Request) {
