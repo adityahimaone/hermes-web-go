@@ -19,3 +19,9 @@
 }
 
 @import "./styles/tokens.css";
+@import "./styles/chrome.css";
+
+/* Layout chrome (titlebar / rail / sidebar / main / composer) uses the
+   vanilla CLASS NAMES + chrome.css above; React components (Phase B) render
+   the same DOM structure as vanilla index.html's <body>. Tailwind utilities
+   are for new glue only, never for restyled vanilla chrome. */

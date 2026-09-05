@@ -1,13 +1,24 @@
 import * as React from 'react'
 import * as ReactDOM from 'react-dom/client'
-
-// A4 placeholder: the shell imports theme.css so the parity harness has
-// computed styles; real App content lands in Phase B.
 import './theme.css'
+import { AppTitlebar } from './components/layout/app-titlebar'
+import { NavRail } from './components/layout/nav-rail'
+import { Sidebar } from './components/layout/sidebar'
+import { MainView } from './components/layout/main-view'
+import { loadLocale } from './i18n'
+
+loadLocale()
 
 function Shell() {
   return (
-    <div id="hermes-vite-shell" data-testid="hermes-vite-shell" />
+    <>
+      <AppTitlebar />
+      <div className="layout">
+        <NavRail />
+        <Sidebar />
+        <MainView />
+      </div>
+    </>
   )
 }
 
