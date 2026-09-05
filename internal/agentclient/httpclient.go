@@ -46,15 +46,19 @@ func (c *HTTPClient) request(ctx context.Context, method, path string, body any,
 }
 
 func (c *HTTPClient) RunTurn(ctx context.Context, req TurnRequest) (<-chan TurnEvent, error) {
+	// Gateway /v1/runs contract (api_server_runs.py): OpenAI Responses-style
+	// body — `input` (string message), `conversation_history` ([]{role,content}),
+	// optional `session_id`/`model`. The pre-shim fields (`message`, `history`)
+	// 400 with "Missing 'input' field".
 	payload := map[string]any{
-		"session_id":  req.SessionID,
-		"message":     req.Message,
-		"attachments": req.Attachments,
-		"workspace":   req.Workspace,
-		"provider":    req.Provider,
-		"model":       req.Model,
-		"history":     req.History,
-		"source":      "webui",
+		"session_id":          req.SessionID,
+		"input":               req.Message,
+		"conversation_history": req.History,
+		"attachments":         req.Attachments,
+		"workspace":           req.Workspace,
+		"provider":            req.Provider,
+		"model":               req.Model,
+		"source":              "webui",
 	}
 	resp, err := c.request(ctx, http.MethodPost, "/v1/runs", payload, "application/json")
 	if err != nil {
