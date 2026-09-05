@@ -9,9 +9,14 @@ import { SessionList } from '../sessions/session-list'
 import { useSessions } from '../../hooks/useSessions'
 import type { SessionMeta } from '../../state/types'
 import { TasksPanel } from '../panels/tasks-panel'
+import { KanbanPanel } from '../panels/kanban-panel'
 import { SkillsPanel } from '../panels/skills-panel'
 import { MemoryPanel } from '../panels/memory-panel'
 import { TodosPanel } from '../panels/todos-panel'
+import { InsightsPanel } from '../panels/insights-panel'
+import { LogsPanel } from '../panels/logs-panel'
+import { ProfilesPanel } from '../panels/profiles-panel'
+import { WorkspacesSidebarPanel } from '../panels/workspaces-panel'
 
 export function Sidebar({
   activeSession,
@@ -134,16 +139,20 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* Remaining panel-views. Phase E1: tasks/skills/memory/todos wired;
-          kanban/insights/profiles/logs stay placeholders until E2. Active
-          state follows the nav rail. */}
+      {/* Remaining panel-views. Phase E2: all panels wired; settings menu
+          placeholder until E3. Active state follows the nav rail. */}
       <div className={`panel-view${activePanel === 'tasks' ? ' active' : ''}`} id="panelTasks">
         <div className="panel-head">
           <span data-i18n="scheduled_jobs">{t('scheduled_jobs')}</span>
         </div>
         <TasksPanel />
       </div>
-      <div className={`panel-view${activePanel === 'kanban' ? ' active' : ''}`} id="panelKanban" />
+      <div className={`panel-view${activePanel === 'kanban' ? ' active' : ''}`} id="panelKanban">
+        <div className="panel-head">
+          <span data-i18n="tab_kanban">{t('tab_kanban')}</span>
+        </div>
+        <KanbanPanel />
+      </div>
       <div className={`panel-view${activePanel === 'skills' ? ' active' : ''}`} id="panelSkills">
         <div className="panel-head">
           <span data-i18n="tab_skills">{t('tab_skills')}</span>
@@ -156,15 +165,36 @@ export function Sidebar({
         </div>
         <MemoryPanel activeSessionId={activeSession?.session_id ?? null} />
       </div>
+      <div className={`panel-view${activePanel === 'workspaces' ? ' active' : ''}`} id="panelWorkspaces">
+        <div className="panel-head">
+          <span data-i18n="tab_workspaces">{t('tab_workspaces')}</span>
+        </div>
+        <WorkspacesSidebarPanel />
+      </div>
+      <div className={`panel-view${activePanel === 'profiles' ? ' active' : ''}`} id="panelProfiles">
+        <div className="panel-head">
+          <span data-i18n="tab_profiles">{t('tab_profiles')}</span>
+        </div>
+        <ProfilesPanel />
+      </div>
       <div className={`panel-view${activePanel === 'todos' ? ' active' : ''}`} id="panelTodos">
         <div className="panel-head">
           <span data-i18n="current_task_list">{t('current_task_list')}</span>
         </div>
         <TodosPanel />
       </div>
-      <div className={`panel-view${activePanel === 'insights' ? ' active' : ''}`} id="panelInsights" />
-      <div className={`panel-view${activePanel === 'profiles' ? ' active' : ''}`} id="panelProfiles" />
-      <div className={`panel-view${activePanel === 'logs' ? ' active' : ''}`} id="panelLogs" />
+      <div className={`panel-view${activePanel === 'insights' ? ' active' : ''}`} id="panelInsights">
+        <div className="panel-head">
+          <span data-i18n="tab_insights">{t('tab_insights')}</span>
+        </div>
+        <InsightsPanel />
+      </div>
+      <div className={`panel-view${activePanel === 'logs' ? ' active' : ''}`} id="panelLogs">
+        <div className="panel-head">
+          <span data-i18n="tab_logs">{t('tab_logs')}</span>
+        </div>
+        <LogsPanel />
+      </div>
       <div className={`panel-view${activePanel === 'settings' ? ' active' : ''}`} id="panelSettings" />
 
       <div className="resize-handle" id="sidebarResize" />
