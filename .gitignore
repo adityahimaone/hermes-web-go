@@ -3,3 +3,9 @@
 __pycache__/
 .pytest_cache/
 /hermes-web-go
+/static-vite/node_modules/
+/static-vite/dist/
+/static-vite/tsconfig.tsbuildinfo
+# GENERATED artifacts — regenerate with `npm run gen:i18n` in static-vite/
+/static-vite/src/i18n/strings.json
+/static-vite/src/i18n/keys.d.ts

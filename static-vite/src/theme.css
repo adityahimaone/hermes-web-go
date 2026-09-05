@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  /* Tailwind v4: reference the EXISTING CSS variables defined by tokens.css
+     so utilities like `bg-[var(--bg)]` / `text-[var(--accent)]` resolve
+     correctly. Tailwind does NOT define its own color scale here — every
+     value comes from static/style.css verbatim via tokens.css. */
+
+  --color-bg: var(--bg);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-blue: var(--blue);
+  --color-gold: var(--gold);
+}
+
+@import "./styles/tokens.css";
