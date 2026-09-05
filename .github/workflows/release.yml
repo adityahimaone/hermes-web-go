@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: macos-14,   goos: darwin, goarch: arm64 }
+          - { os: macos-13,   goos: darwin, goarch: amd64 }
+          - { os: ubuntu-22.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-22.04-arm, goos: linux, goarch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "dist/hermes-web-go" ./cmd/server
+      - name: Package (binary + static + shim)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="dist/pkg"
+          mkdir -p "$STAGE/proto"
+          cp -R static "$STAGE/static"
+          cp deploy/agent-grpc-shim/agent_grpc.py "$STAGE/"
+          cp deploy/agent-grpc-shim/proto/* "$STAGE/proto/"
+          cat > "$STAGE/VERSION" <<< "${VERSION}"
+          tar -czf "dist/hermes-web-go_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" \
+            -C "$STAGE" .
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/hermes-web-go_*.tar.gz
+          generate_release_notes: true

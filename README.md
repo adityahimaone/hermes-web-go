@@ -15,6 +15,7 @@ Browser  ──SSE──▶  Go :8787  ──gRPC/UDS──▶  Python gateway s
 
 ## Table of Contents
 
+- [One-Command Install](#one-command-install)
 - [Status](#status)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
@@ -45,9 +46,44 @@ on `:8788`. See `docs/10-endpoint-migration-inventory.md` for the live count
 
 No route is removed from the proxy until its Go handler passes parity tests.
 
+## One-Command Install
+
+No Go toolchain, no Python packaging — the installer downloads a prebuilt
+binary and bootstraps only what's missing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/adityahimaone/hermes-web-go/main/install.sh | bash
+```
+
+What it does:
+
+1. Detects OS/arch (macOS arm64/amd64, Linux amd64/arm64)
+2. Downloads the prebuilt `hermes-web-go` binary from GitHub Releases — **Go not required**
+3. Checks `python3` for `grpcio`+`httpx`; if missing, creates a tiny isolated
+   venv at `~/.hermes/web-go/shim-venv` and pip-installs just those two —
+   **system Python untouched**
+4. Installs the agent gRPC shim into `~/.hermes/hermes-agent/`
+5. Registers launchd (macOS) / systemd user units (Linux) with `KeepAlive`/`Restart=always`
+6. Health-checks `http://127.0.0.1:8787/health`
+
+Options:
+
+```bash
+HERMES_WEBGO_VERSION=v0.1.0   # pin a release (default: latest)
+HERMES_WEBGO_INSTALL_DIR=...  # default ~/.hermes/web-go
+HERMES_WEBGO_REPO=...         # default adityahimaone/hermes-web-go
+```
+
+Upgrading: re-run the same command (it replaces the binary and restarts the service).
+
+Zero-install (nothing on your machine) is not possible for a local setup — the
+server must read `~/.hermes/state.db` and the agent socket. For that case, deploy
+the prebuilt binary on a VPS instead (see [Deployment](#deployment)).
+
 ## Prerequisites
 
-- Go 1.26+ (`go version`)
+- Go 1.26+ (`go version`) — **only for building from source**; the one-command
+  installer above uses prebuilt binaries
 - Python 3.11+ with the Hermes venv at `~/.hermes/hermes-agent/venv` (provides `grpc`, `httpx`, `agent_grpc` shim deps)
 - `modernc.org/sqlite` is pure Go — no CGO / no `libsqlite3` needed
 - macOS LaunchAgents for the two Python daemons (gateway + gRPC shim), or run them manually
