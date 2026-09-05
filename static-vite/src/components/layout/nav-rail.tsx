@@ -19,10 +19,17 @@ const RAIL_TABS = [
 ] as const
 
 /**
- * Primary nav rail (desktop) — vanilla class names preserved; switching wires
- * up in the panels phase. Chat is the default active tab.
+ * Primary nav rail (desktop) — vanilla class names preserved. Clicking a tab
+ * activates the matching sidebar panel-view (Phase D wiring; parent owns the
+ * active panel state so the sidebar mirror stays in sync).
  */
-export function NavRail({ active = 'chat' }: { active?: string }) {
+export function NavRail({
+  active = 'chat',
+  onSwitch,
+}: {
+  active?: string
+  onSwitch?: (panel: string) => void
+}) {
   return (
     <nav className="rail" aria-label="Primary navigation">
       {RAIL_TABS.map(({ panel, label, Icon }) => (
@@ -34,6 +41,7 @@ export function NavRail({ active = 'chat' }: { active?: string }) {
           data-tooltip={t(label as Parameters<typeof t>[0])}
           data-i18n-title={label}
           aria-label={t(label as Parameters<typeof t>[0])}
+          onClick={() => onSwitch?.(panel)}
         >
           <Icon />
         </button>
@@ -46,6 +54,7 @@ export function NavRail({ active = 'chat' }: { active?: string }) {
         data-tooltip={t('tab_settings')}
         data-i18n-title="tab_settings"
         aria-label={t('tab_settings')}
+        onClick={() => onSwitch?.('settings')}
       >
         <IconSettings />
         <span className="auth-warning-badge" id="authWarningBadgeDesktop" style={{ display: 'none', position: 'absolute', top: 4, right: 4, width: 8, height: 8, borderRadius: '50%', background: '#e05' }} />

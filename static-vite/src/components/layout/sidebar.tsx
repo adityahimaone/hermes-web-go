@@ -1,15 +1,56 @@
-import { useState } from 'react'
+// Sidebar — Phase D: chat panel wired to useSessions (list, search, CRUD,
+// date-grouped rows). Other panel-views keep Phase B placeholders; the
+// Workspaces panel now hosts the WorkspacePanel component (files tab).
+
+import { useCallback, useEffect, useState } from 'react'
 import { t } from '../../i18n'
 import { NavRail } from './nav-rail'
+import { SessionList } from '../sessions/session-list'
+import { useSessions } from '../../hooks/useSessions'
+import type { SessionMeta } from '../../state/types'
 
-/**
- * Sidebar — Phase B scope: mobile close button, sidebar-nav mirror, chat panel
- * head with New-chat button, session search field, empty session list. Other
- * panel-view placeholders render the same head/loading pattern as vanilla but
- * their data wiring is per-panel work in Phase D/E.
- */
-export function Sidebar() {
-  const [active] = useState('chat')
+export function Sidebar({
+  activeSession,
+  onSessionChange,
+  activePanel = 'chat',
+  onPanelSwitch,
+}: {
+  activeSession: SessionMeta | null
+  onSessionChange: (s: SessionMeta | null) => void
+  activePanel?: string
+  onPanelSwitch?: (panel: string) => void
+}) {
+  const [draft, setDraft] = useState('')
+
+  const sessions = useSessions({
+    onActiveSession: onSessionChange,
+    activeSessionId: activeSession?.session_id ?? null,
+  })
+  const { state } = sessions
+
+  const selectSession = useCallback(
+    (sid: string) => {
+      void sessions.loadSession(sid).catch(() => undefined)
+    },
+    [sessions],
+  )
+
+  const createSession = useCallback(() => {
+    void sessions.newSession().catch(() => undefined)
+  }, [sessions])
+
+  // Debounced search (vanilla: 300ms _searchDebounceTimer).
+  useEffect(() => {
+    if (!draft) {
+      void sessions.search('')
+      return
+    }
+    const id = setTimeout(() => void sessions.search(draft), 300)
+    return () => clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft])
+
+  const rows = state.searchHits ?? state.sessions
 
   return (
     <aside className="sidebar">
@@ -24,11 +65,11 @@ export function Sidebar() {
       </button>
 
       <div className="sidebar-nav">
-        <SidebarNavMirror active={active} />
+        <SidebarNavMirror active={activePanel} onSwitch={onPanelSwitch} />
       </div>
 
-      {/* Chat panel — the only active panel-view in Phase B */}
-      <div className="panel-view active" id="panelChat">
+      {/* Chat panel */}
+      <div className={`panel-view${activePanel === 'chat' ? ' active' : ''}`} id="panelChat">
         <div className="panel-head">
           <span data-i18n="tab_chat">{t('tab_chat')}</span>
           <div className="panel-head-actions">
@@ -39,6 +80,7 @@ export function Sidebar() {
               data-tooltip={t('new_conversation') + ' (Cmd+K)'}
               data-i18n-title="new_conversation"
               aria-label={t('new_conversation')}
+              onClick={createSession}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
             </button>
@@ -57,28 +99,61 @@ export function Sidebar() {
               data-lpignore="true"
               data-bwignore="true"
               data-form-type="other"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
             />
-            <button type="button" id="sessionSearchClear" className="session-search-clear has-tooltip has-tooltip--bottom-right" aria-label={t('clear_conversation_filter')} data-tooltip={t('clear_conversation_filter')} hidden>
+            <button
+              type="button"
+              id="sessionSearchClear"
+              className="session-search-clear has-tooltip has-tooltip--bottom-right"
+              aria-label={t('clear_conversation_filter')}
+              data-tooltip={t('clear_conversation_filter')}
+              hidden={!draft}
+              onClick={() => setDraft('')}
+            >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
             </button>
           </div>
         </div>
-        <div className="session-list" id="sessionList" />
+        <div className="session-list" id="sessionList">
+          <SessionList
+            sessions={state.sessions}
+            loading={state.loading}
+            error={state.error}
+            activeSessionId={activeSession?.session_id ?? null}
+            nowDelta={state.serverTimeDeltaMs}
+            searchHits={state.searchHits}
+            query={state.searchQuery}
+            onSelect={selectSession}
+            onNew={createSession}
+          />
+        </div>
       </div>
 
       {/* Placeholder panel-views for the remaining tabs — same wrapper as
-          vanilla; contents fill in at their phases (D/E). */}
-      {(['tasks', 'kanban', 'skills', 'memory', 'todos', 'insights', 'workspaces', 'profiles', 'logs'] as const).map((panel) => (
-        <div className="panel-view" id={`panel${panel[0].toUpperCase()}${panel.slice(1)}`} key={panel} />
+          vanilla; contents fill in at their phases (E). Active state follows
+          the nav rail. */}
+      {(['tasks', 'kanban', 'skills', 'memory', 'todos', 'insights', 'profiles', 'logs'] as const).map((panel) => (
+        <div
+          className={`panel-view${activePanel === panel ? ' active' : ''}`}
+          id={`panel${panel[0].toUpperCase()}${panel.slice(1)}`}
+          key={panel}
+        />
       ))}
-      <div className="panel-view" id="panelSettings" />
+      <div className={`panel-view${activePanel === 'settings' ? ' active' : ''}`} id="panelSettings" />
 
       <div className="resize-handle" id="sidebarResize" />
     </aside>
   )
 }
 
-function SidebarNavMirror({ active }: { active: string }) {
+function SidebarNavMirror({
+  active,
+  onSwitch,
+}: {
+  active: string
+  onSwitch?: (panel: string) => void
+}) {
   // Mirrors the rail tabs at 18px with data-label (mobile + narrow layout).
   const TABS = [
     { panel: 'chat', label: 'tab_chat' },
@@ -103,6 +178,7 @@ function SidebarNavMirror({ active }: { active: string }) {
           type="button"
           data-tooltip={t(label as Parameters<typeof t>[0])}
           data-i18n-title={label}
+          onClick={() => onSwitch?.(panel)}
         >
           <NavRailIcon panel={panel} />
         </button>
@@ -114,6 +190,7 @@ function SidebarNavMirror({ active }: { active: string }) {
         data-tooltip={t('tab_settings')}
         data-i18n-title="tab_settings"
         style={{ position: 'relative' }}
+        onClick={() => onSwitch?.('settings')}
       >
         <NavRailIcon panel="settings" />
         <span className="auth-warning-badge" id="authWarningBadgeMobile" style={{ display: 'none', position: 'absolute', top: 4, right: 4, width: 8, height: 8, borderRadius: '50%', background: '#e05' }} />

@@ -35,7 +35,7 @@ describe('MainView C6 integration', () => {
       },
       respondApproval,
     })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     expect(screen.getByText('Approval required')).toBeTruthy()
     expect(document.getElementById('approvalCmd')?.textContent).toBe('rm -rf /tmp/x')
     // counter shows "1 of 2"
@@ -50,7 +50,7 @@ describe('MainView C6 integration', () => {
       approval: { pending: { approval_id: 'a1', description: 'x', command: 'y' }, count: 1 },
       approvalResponding: 'deny',
     })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     const once = screen.getByText('Allow once').closest('button') as HTMLButtonElement
     expect(once.disabled).toBe(true)
   })
@@ -61,7 +61,7 @@ describe('MainView C6 integration', () => {
       clarify: { clarify_id: 'c1', question: 'Which db?', choices: ['postgres', 'sqlite'] },
       respondClarify,
     })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     expect(screen.getByText('Which db?')).toBeTruthy()
     fireEvent.click(screen.getByText('sqlite'))
     await waitFor(() => expect(respondClarify).toHaveBeenCalledWith('sqlite'))
@@ -73,7 +73,7 @@ describe('MainView C6 integration', () => {
       clarify: { clarify_id: 'c1', question: 'Name?' },
       respondClarify,
     })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     const input = document.getElementById('clarifyInput') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'my answer' } })
     fireEvent.click(document.getElementById('clarifySubmit') as HTMLButtonElement)
@@ -82,7 +82,7 @@ describe('MainView C6 integration', () => {
 
   it('shows LiveRunStatus while streaming', () => {
     const chat = makeChat({ state: { activeStreamId: 'st1', busy: true } })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     // right after mount, liveElapsed is computed synchronously (now-start >= 0)
     const status = document.querySelector('.live-run-status') as HTMLElement | null
     expect(status).toBeTruthy()
@@ -91,13 +91,13 @@ describe('MainView C6 integration', () => {
 
   it('no LiveRunStatus when idle', () => {
     const chat = makeChat({})
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     expect(document.querySelector('.live-run-status')).toBeNull()
   })
 
   it('composer send is disabled while busy', () => {
     const chat = makeChat({ state: { busy: true } })
-    render(<MainView chat={chat} />)
+    render(<MainView chat={chat} activeSession={null} />)
     const send = document.getElementById('btnSend') as HTMLButtonElement
     expect(send.disabled).toBe(true)
   })

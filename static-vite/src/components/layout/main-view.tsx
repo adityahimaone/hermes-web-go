@@ -12,8 +12,15 @@ import { useWorklogTiming } from '../../hooks/useWorklogTiming'
  * Main view — empty-state + message list. Phase C: state comes from
  * useChatStream (chatReducer); composer send wires to the facade. Approval /
  * clarify cards render in the composer flyout (vanilla DOM position).
+ * Phase D: activeSession feeds the chat reducer's session + rev guard key.
  */
-export function MainView({ chat }: { chat: UseChatStream }) {
+export function MainView({
+  chat,
+  activeSession,
+}: {
+  chat: UseChatStream
+  activeSession: AppState['session'] | null
+}) {
   const state = chat.state
   const timing = useWorklogTiming({
     activeStreamId: state.activeStreamId,
