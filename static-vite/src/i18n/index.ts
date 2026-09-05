@@ -20,6 +20,18 @@ export function t(key: I18nKey | string, ...args: unknown[]): string {
 
   if (raw === undefined) return key as string
 
+  // Function-valued entries were stringified by convert-i18n.mjs as
+  // "(n) => `1 of ${n} pending`". Revive by evaluating the arrow.
+  if (typeof raw === 'string' && /^\s*\(.*\)\s*=>/.test(raw)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const fn = Function(`return (${raw})`)() as (...a: unknown[]) => unknown
+      return String(fn(...args))
+    } catch {
+      // fall through to plain string handling
+    }
+  }
+
   const str: string =
     typeof raw === 'function' ? String((raw as (...a: unknown[]) => unknown)(...args)) : String(raw)
 

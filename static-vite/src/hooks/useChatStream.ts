@@ -1,13 +1,13 @@
 // useChatStream — C2 facade: owns the EventSource lifecycle, feeds the pure
 // reducer through a safe state updater, and exposes the app state plus a
-// send() action. Reconnect/backoff and approval/clarify UI wiring land with
-// C5/C6; this facade is the single dispatch boundary.
+// send() action. Approval/clarify raw events route to useApprovalClarify.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { chatReducer } from '../state/chatReducer'
 import { initialAppState, type AppState, type ChatEvent } from '../state/types'
 import { wireChatSSE, type SseSubscription } from '../lib/sse'
 import { useRevGuard, type RevGuard } from './useRevGuard'
+import { useApprovalClarify } from './useApprovalClarify'
 
 /** CSRF-safe fetch (vanilla inline wrapper in index.html head). */
 export async function api(path: string, init?: RequestInit): Promise<Response> {
@@ -22,6 +22,13 @@ export interface UseChatStream {
   state: AppState
   send(text: string, opts?: { model?: string; model_provider?: string | null }): Promise<void>
   stop(): void
+  approval: ReturnType<typeof useApprovalClarify>['approval']
+  clarify: ReturnType<typeof useApprovalClarify>['clarify']
+  approvalResponding: ReturnType<typeof useApprovalClarify>['approvalResponding']
+  clarifyResponding: ReturnType<typeof useApprovalClarify>['clarifyResponding']
+  respondApproval: ReturnType<typeof useApprovalClarify>['respondApproval']
+  respondClarify: ReturnType<typeof useApprovalClarify>['respondClarify']
+  dismissApproval: () => void
 }
 
 export function useChatStream(): UseChatStream {
@@ -29,6 +36,13 @@ export function useChatStream(): UseChatStream {
   const subRef = useRef<SseSubscription | null>(null)
   const revGuard: RevGuard = useRevGuard()
   const busyRef = useRef(false)
+
+  const approvalClarify = useApprovalClarify((text) => {
+    setState((prev) => ({
+      ...prev,
+      messages: [...prev.messages, { role: 'user', content: text, _clarify_response: true }],
+    }))
+  })
 
   const dispatch = useCallback((ev: ChatEvent) => {
     setState((prev) => chatReducer(prev, ev))
@@ -77,6 +91,7 @@ export function useChatStream(): UseChatStream {
         }
         const start = (await res.json()) as { stream_id?: string; session_id?: string }
         const streamId = start.stream_id ?? ''
+        if (start.session_id) approvalClarify.setSession(start.session_id)
         setState((prev) => ({ ...prev, activeStreamId: streamId || null }))
 
         const url = new URL(
@@ -89,6 +104,13 @@ export function useChatStream(): UseChatStream {
             if (ev.type === 'done' || ev.type === 'apperror') busyRef.current = false
             dispatch(ev)
           },
+          onRaw: (name, raw) => {
+            if (name !== 'approval' && name !== 'clarify') return
+            try {
+              const data = JSON.parse(typeof raw.data === 'string' && raw.data ? raw.data : '{}') as Record<string, unknown>
+              approvalClarify.onRawSSE(name, data)
+            } catch {}
+          },
         })
       } catch {
         busyRef.current = false
@@ -99,6 +121,7 @@ export function useChatStream(): UseChatStream {
         }))
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [dispatch],
   )
 
@@ -111,7 +134,22 @@ export function useChatStream(): UseChatStream {
     [revGuard],
   )
 
-  return { state, send, stop }
+  const dismissApproval = useCallback(() => {
+    approvalClarify.clearForSession(null)
+  }, [approvalClarify])
+
+  return {
+    state,
+    send,
+    stop,
+    approval: approvalClarify.approval,
+    clarify: approvalClarify.clarify,
+    approvalResponding: approvalClarify.approvalResponding,
+    clarifyResponding: approvalClarify.clarifyResponding,
+    respondApproval: approvalClarify.respondApproval,
+    respondClarify: approvalClarify.respondClarify,
+    dismissApproval,
+  }
 }
 
 // applySnapshot is exported via the hook closure in Phase D (sessions); kept

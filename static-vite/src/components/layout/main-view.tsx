@@ -2,16 +2,28 @@ import { useEffect } from 'react'
 import { t } from '../../i18n'
 import { HermesEmptyMark } from '../ui/hermes-mark'
 import { MessageList } from '../chat/message-list'
+import { ApprovalCard, ClarifyCard } from '../chat/approval-clarify'
+import { LiveRunStatus } from '../chat/live-run-status'
 import type { AppState } from '../../state/types'
+import type { UseChatStream } from '../../hooks/useChatStream'
+import { useWorklogTiming } from '../../hooks/useWorklogTiming'
 
 /**
  * Main view — empty-state + message list. Phase C: state comes from
- * useChatStream (chatReducer); composer send wires to the facade. Banners and
- * a11y announcer keep the same ids/geometry as vanilla.
+ * useChatStream (chatReducer); composer send wires to the facade. Approval /
+ * clarify cards render in the composer flyout (vanilla DOM position).
  */
-export function MainView({ state, onSend }: { state: AppState; onSend: (text: string) => void }) {
+export function MainView({ chat }: { chat: UseChatStream }) {
+  const state = chat.state
+  const timing = useWorklogTiming({
+    activeStreamId: state.activeStreamId,
+    busy: state.busy,
+    doneDurationSeconds: state.lastUsage?.duration_seconds ?? null,
+  })
+  const liveTokens = state.lastUsage?.output_tokens ?? null
+
   useEffect(() => {
-    // Phase C: no side-effects; seam for worklog/resize observers.
+    // Seam for scroll observers / a11y announcer (later phases).
   }, [])
 
   const hasMessages = state.messages.length > 0 || state.toolCalls.length > 0
@@ -59,7 +71,9 @@ export function MainView({ state, onSend }: { state: AppState; onSend: (text: st
               </div>
             ) : null}
             {hasMessages ? <MessageList messages={state.messages} toolCalls={state.toolCalls} /> : null}
-            <div id="liveRunStatus" hidden />
+            {timing.running && timing.liveElapsed != null ? (
+              <LiveRunStatus elapsedSeconds={timing.liveElapsed} tokens={liveTokens} />
+            ) : null}
             <div id="a11yAnnouncer" className="sr-only" role="status" aria-live="polite" aria-atomic="true" />
             <div id="liveCompressionCards" className="live-compression-cards" />
             <div id="liveToolCards" style={{ display: 'none', maxWidth: 800, margin: '0 auto', width: '100%', padding: '0 24px' }} />
@@ -89,9 +103,18 @@ export function MainView({ state, onSend }: { state: AppState; onSend: (text: st
             <div id="queueCard" className="queue-card" role="region" aria-label={t('queued_messages')} aria-live="polite">
               <div id="queueChips" className="queue-card-inner" />
             </div>
-            <div className="approval-card" id="approvalCard" role="alertdialog" aria-labelledby="approvalHeading" aria-describedby="approvalDesc" hidden aria-hidden="true" inert>
-              <div className="approval-inner" />
-            </div>
+            {chat.approval ? (
+              <ApprovalCard
+                pending={chat.approval.pending}
+                pendingCount={chat.approval.count}
+                responding={chat.approvalResponding}
+                onRespond={(choice) => void chat.respondApproval(choice)}
+                onDismiss={chat.dismissApproval}
+              />
+            ) : null}
+            {chat.clarify ? (
+              <ClarifyCard pending={chat.clarify} responding={chat.clarifyResponding} onRespond={(v) => void chat.respondClarify(v)} />
+            ) : null}
           </div>
           <div className="composer-box" id="composerBox">
             <textarea
@@ -103,7 +126,7 @@ export function MainView({ state, onSend }: { state: AppState; onSend: (text: st
                   e.preventDefault()
                   const el = e.currentTarget
                   if (el.value.trim() && !state.busy) {
-                    onSend(el.value)
+                    void chat.send(el.value)
                     el.value = ''
                   }
                 }
@@ -122,7 +145,7 @@ export function MainView({ state, onSend }: { state: AppState; onSend: (text: st
                   onClick={() => {
                     const el = document.getElementById('msg') as HTMLTextAreaElement | null
                     if (el && el.value.trim() && !state.busy) {
-                      onSend(el.value)
+                      void chat.send(el.value)
                       el.value = ''
                     }
                   }}

@@ -18,7 +18,7 @@ function Shell() {
       <div className="layout">
         <NavRail />
         <Sidebar />
-        <MainView state={chat.state} onSend={(text) => void chat.send(text)} />
+        <MainView chat={chat} />
       </div>
     </>
   )
