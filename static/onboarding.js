@@ -527,7 +527,7 @@ async function _saveOnboardingDefaults(){
 async function _finishOnboarding(){
   await _saveOnboardingProviderSetup();
   await _saveOnboardingDefaults();
-  const done=await api('/api/onboarding/complete',{method:'POST',body:'{}'});
+  const done=await api('/api/onboarding/complete',{method:'POST',body:JSON.stringify({completed:true})});
   ONBOARDING.status=done;
   ONBOARDING.active=false;
   $('onboardingOverlay').style.display='none';
@@ -545,7 +545,7 @@ async function _finishOnboarding(){
 async function skipOnboarding(){
   try{
     // Mark onboarding completed server-side without changing any config
-    await api('/api/onboarding/complete',{method:'POST',body:'{}'});
+    await api('/api/onboarding/complete',{method:'POST',body:JSON.stringify({completed:true})});
     ONBOARDING.active=false;
     $('onboardingOverlay').style.display='none';
     showToast(t('onboarding_skipped')||'Setup skipped');
