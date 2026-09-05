@@ -36,20 +36,20 @@ export function useWorklogTiming({ activeStreamId, busy, doneDurationSeconds, no
   const startStreamRef = useRef<string | null>(null)
   const settledRef = useRef<{ streamId: string; duration: number } | null>(null)
 
-  // (Re)arm on stream start; reset settled marker only when a NEW stream id arms.
-  useEffect(() => {
-    if (activeStreamId && busy) {
-      if (startStreamRef.current !== activeStreamId) {
-        startRef.current = now()
-        startStreamRef.current = activeStreamId
-        settledRef.current = null
-      }
-    } else if (!activeStreamId && !busy) {
+  // Arm synchronously during render (not deferred to useEffect) so
+  // liveElapsed is non-null on the first paint — fixes first-frame test.
+  if (activeStreamId && busy) {
+    if (startStreamRef.current !== activeStreamId) {
+      startRef.current = now()
+      startStreamRef.current = activeStreamId
+      settledRef.current = null
+    }
+  } else if (!activeStreamId && !busy) {
+    if (startRef.current !== null || startStreamRef.current !== null) {
       startRef.current = null
       startStreamRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStreamId, busy])
+  }
 
   // 1s live tick while running.
   useEffect(() => {
@@ -59,11 +59,14 @@ export function useWorklogTiming({ activeStreamId, busy, doneDurationSeconds, no
   }, [activeStreamId, busy])
 
   // Settle exactly once per stream id (blink-guard analogue: duplicates no-op).
-  useEffect(() => {
-    if (doneDurationSeconds == null || !activeStreamId) return
-    if (settledRef.current && settledRef.current.streamId === activeStreamId) return
-    settledRef.current = { streamId: activeStreamId, duration: doneDurationSeconds }
-  }, [doneDurationSeconds, activeStreamId])
+  // Runs synchronously during render (same reason as arming above): the done
+  // payload and activeStreamId arrive in the same commit, so settledDuration
+  // is visible on the settle paint without waiting an effect pass.
+  if (doneDurationSeconds != null && activeStreamId) {
+    if (!settledRef.current || settledRef.current.streamId !== activeStreamId) {
+      settledRef.current = { streamId: activeStreamId, duration: doneDurationSeconds }
+    }
+  }
 
   const liveElapsed =
     activeStreamId && busy && startRef.current != null ? Math.max(0, (now() - startRef.current) / 1000) : null

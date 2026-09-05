@@ -36,6 +36,10 @@ export function useChatStream(): UseChatStream {
   const subRef = useRef<SseSubscription | null>(null)
   const revGuard: RevGuard = useRevGuard()
   const busyRef = useRef(false)
+  // Ref mirror of state for callbacks that must read the latest stream id
+  // without re-creating (stop()).
+  const stateRef = useRef<AppState>(state)
+  stateRef.current = state
 
   const approvalClarify = useApprovalClarify((text) => {
     setState((prev) => ({
@@ -49,10 +53,34 @@ export function useChatStream(): UseChatStream {
   }, [])
 
   const stop = useCallback(() => {
-    subRef.current?.close()
-    subRef.current = null
-    busyRef.current = false
-    setState((prev) => ({ ...prev, busy: false, activeStreamId: null }))
+    // Server-side cancel (real endpoint, backend cf685a2): aborts the relay,
+    // persists the partial answer, emits canonical done. The done event then
+    // settles the reducer; SSE close happens at stream_end/done.
+    const sid = stateRef.current.activeStreamId
+    if (sid) {
+      void api('/api/chat/cancel?stream_id=' + encodeURIComponent(sid), { method: 'POST' })
+        .then((res) => {
+          if (!res.ok && res.status !== 404) {
+            // 404 = stream already gone; anything else — close locally so the
+            // UI never wedges busy.
+            subRef.current?.close()
+            subRef.current = null
+            busyRef.current = false
+            setState((prev) => ({ ...prev, busy: false, activeStreamId: null }))
+          }
+        })
+        .catch(() => {
+          subRef.current?.close()
+          subRef.current = null
+          busyRef.current = false
+          setState((prev) => ({ ...prev, busy: false, activeStreamId: null }))
+        })
+    } else {
+      subRef.current?.close()
+      subRef.current = null
+      busyRef.current = false
+      setState((prev) => ({ ...prev, busy: false, activeStreamId: null }))
+    }
   }, [])
 
   // Close on unmount (session switch / teardown).
@@ -82,10 +110,16 @@ export function useChatStream(): UseChatStream {
         })
         if (!res.ok) {
           busyRef.current = false
+          // 409 = overlapping turn (backend cf685a2 live-turn guard). The
+          // previous optimistic user row stays; tell the user why nothing ran.
+          const errMsg =
+            res.status === 409
+              ? '**A turn is already running.** Stop it or wait for it to finish before sending a new message.'
+              : `**Error:** HTTP ${res.status}`
           setState((prev) => ({
             ...prev,
             busy: false,
-            messages: [...prev.messages, { role: 'assistant', content: `**Error:** HTTP ${res.status}` }],
+            messages: [...prev.messages, { role: 'assistant', content: errMsg }],
           }))
           return
         }
