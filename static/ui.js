@@ -18900,10 +18900,21 @@ function _syncToolCallGroupSummary(group){
     if(group.getAttribute('data-run-activity-group')==='1'){
       label.textContent=toolCount?_toolWorklogSummary(cards,{live:isLiveWorklog, toolCount}):'Running';
     }else if(isWorklogGroup){
+      // Live worklog ticks "Processed 1s → 2s → …" from pending_started_at
+      // while streaming; at done the settled control replaces it once with
+      // the final "Processed Ns" (turnDuration). The in-flight guard keeps
+      // the previous label through transient group recreation instead of
+      // flashing the bare fallback (user: counter must keep running, then
+      // disappear into the settled duration).
       const processedLabel=isLiveWorklog
         ? _activityProcessedElapsedLabel(group)
         : _activitySettledProcessedLabel(group);
-      label.textContent=processedLabel||t('processed_elapsed','');
+      const inFlightTurn=!!(S.activeStreamId||S.busy)&&!!group.closest&&group.closest('#liveAssistantTurn');
+      if(processedLabel){
+        label.textContent=processedLabel;
+      }else if(!inFlightTurn||!label.textContent){
+        label.textContent=t('processed_elapsed','');
+      }
     }else{
       const rows=Array.from(group.querySelectorAll('.tool-card-row'));
       // Prefer the live _tcData classification; fall back to the durable data-*

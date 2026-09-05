@@ -146,6 +146,7 @@ func reconcileSessionMessages(sidecar []map[string]any, stateRows []map[string]a
 		merged = append(merged, m)
 	}
 	carryTurnMetaToLastAssistant(merged, sidecar)
+	carryTurnMetaToAllAssistants(merged, sidecar)
 	return merged
 }
 
@@ -179,6 +180,67 @@ func carryTurnMetaToLastAssistant(merged, sidecar []map[string]any) {
 			}
 		}
 		return
+	}
+}
+
+// carryTurnMetaToAllAssistants restores per-turn timing (_turnDuration,
+// _turnTps, _firstTokenMs, _usedModel) on EARLIER assistant turns after a
+// reload. The sidecar carries it for every turn; state.db never does, and
+// without this every turn but the last rendered a bare "Processed" label.
+// Content-key match first, then positional fallback (assistant count can
+// drift when older state.db rows were compacted); never overwrites an
+// existing duration and never fabricates one.
+func carryTurnMetaToAllAssistants(merged, sidecar []map[string]any) {
+	sidecarByContent := make(map[string]map[string]any)
+	for _, m := range sidecar {
+		if m["role"] != "assistant" || m["_turnDuration"] == nil {
+			continue
+		}
+		key := messageContentKey(m)
+		if _, taken := sidecarByContent[key]; !taken {
+			sidecarByContent[key] = m
+		}
+	}
+	metaIdx := 0
+	for i := range merged {
+		dst := merged[i]
+		if dst["role"] != "assistant" || dst["_turnDuration"] != nil {
+			continue
+		}
+		src := sidecarByContent[messageContentKey(dst)]
+		if src == nil {
+			// Positional fallback: walk sidecar assistant meta in order.
+			var cand map[string]any
+			skipped := 0
+			for j := range sidecar {
+				m := sidecar[j]
+				if m["role"] != "assistant" {
+					continue
+				}
+				if m["_turnDuration"] == nil {
+					continue
+				}
+				if skipped < metaIdx {
+					skipped++
+					continue
+				}
+				cand = m
+				break
+			}
+			if cand == nil {
+				continue
+			}
+			src = cand
+		}
+		if src == nil {
+			continue
+		}
+		metaIdx++
+		for _, k := range []string{"_turnDuration", "_turnTps", "_firstTokenMs", "_usedModel"} {
+			if v, ok := src[k]; ok {
+				dst[k] = v
+			}
+		}
 	}
 }
 

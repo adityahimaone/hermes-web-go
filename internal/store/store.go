@@ -175,7 +175,17 @@ CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, color TEXT)
 `
 
 // ImportSession inserts a JSON session into sqlite, tolerating empty optional fields.
+// On conflict it preserves per-turn metadata (_turnDuration, _turnTps,
+// _firstTokenMs, _usedModel, reasoning) that the state.db projection lacks —
+// otherwise every restart strips "Processed in Xs" from all prior turns.
 func ImportSession(db *sql.DB, s SessionImport) error {
+	mergedMessages := s.Messages
+	var existingRaw string
+	if err := db.QueryRow(`SELECT messages FROM sessions WHERE session_id=?`, s.ID).Scan(&existingRaw); err == nil && strings.TrimSpace(existingRaw) != "" && strings.TrimSpace(existingRaw) != "[]" {
+		if m := mergePreserveTurnMeta(existingRaw, s.Messages); m != "" {
+			mergedMessages = m
+		}
+	}
 	if _, err := db.Exec(`
 		INSERT INTO sessions (session_id, title, workspace, model, messages, tool_calls, created_at, updated_at, pinned, archived, project_id, enabled_toolsets, composer_draft)
 		VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?)
@@ -184,12 +194,92 @@ func ImportSession(db *sql.DB, s SessionImport) error {
 			messages=excluded.messages, updated_at=excluded.updated_at,
 			pinned=excluded.pinned, archived=excluded.archived, project_id=excluded.project_id,
 			enabled_toolsets=excluded.enabled_toolsets, composer_draft=excluded.composer_draft
-	`, s.ID, s.Title, s.Workspace, s.Model, s.Messages,
+	`, s.ID, s.Title, s.Workspace, s.Model, mergedMessages,
 		parseTime(s.CreatedAt), parseTime(s.UpdatedAt), s.Pinned, s.Archived, s.ProjectID,
 		s.EnabledToolsets, s.ComposerDraft); err != nil {
 		return err
 	}
 	return nil
+}
+
+func mergePreserveTurnMeta(existingRaw, incomingRaw string) string {
+	var existing, incoming []map[string]any
+	if err := json.Unmarshal([]byte(existingRaw), &existing); err != nil {
+		return ""
+	}
+	if err := json.Unmarshal([]byte(incomingRaw), &incoming); err != nil {
+		return ""
+	}
+	if len(existing) == 0 || len(incoming) == 0 {
+		return ""
+	}
+	// Index existing assistant messages that carry timing by content key.
+	byKey := map[string]map[string]any{}
+	var withMeta []map[string]any
+	for _, m := range existing {
+		if m["role"] != "assistant" {
+			continue
+		}
+		if m["_turnDuration"] == nil {
+			continue
+		}
+		k := messageKey(m)
+		if _, ok := byKey[k]; !ok {
+			byKey[k] = m
+		}
+		withMeta = append(withMeta, m)
+	}
+	if len(withMeta) == 0 {
+		return ""
+	}
+	preserveKeys := []string{"_turnDuration", "_turnTps", "_firstTokenMs", "_usedModel", "_turnUsage", "reasoning"}
+	merged := false
+	metaIdx := 0
+	for i := range incoming {
+		dst := incoming[i]
+		if dst["role"] != "assistant" || dst["_turnDuration"] != nil {
+			continue
+		}
+		src := byKey[messageKey(dst)]
+		if src == nil && metaIdx < len(withMeta) {
+			// Positional fallback: nth assistant with meta in order.
+			src = withMeta[metaIdx]
+		}
+		if src == nil {
+			continue
+		}
+		for _, k := range preserveKeys {
+			if _, ok := dst[k]; !ok {
+				if v, ok := src[k]; ok && v != nil {
+					dst[k] = v
+					merged = true
+				}
+			} else if dst[k] == nil {
+				if v, ok := src[k]; ok && v != nil {
+					dst[k] = v
+					merged = true
+				}
+			}
+		}
+		metaIdx++
+	}
+	if !merged {
+		return ""
+	}
+	b, err := json.Marshal(incoming)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func messageKey(m map[string]any) string {
+	role, _ := m["role"].(string)
+	content, _ := m["content"].(string)
+	if len(content) > 80 {
+		content = content[:80]
+	}
+	return role + "\x00" + content
 }
 
 // GetSession returns one session row, or sql.ErrNoRows if absent.
