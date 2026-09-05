@@ -9,7 +9,8 @@ package httpserver
 //   start/stop/restart defer to the Python gateway control surface and
 //   return a clear "deferred" payload (agent-coupled).
 // workspace/upload — multipart file write into session workspace.
-// chat/cancel — no-op success (streams are cancelled by client disconnect).
+// chat/cancel — real cancel moved to ChatRouter (chat.go) with turnCancels +
+// AgentClient wiring; the wave8 no-op was removed so it cannot mask it.
 
 import (
 	"crypto/rand"
@@ -536,11 +537,8 @@ func wave8Router(r chi.Router, db *sql.DB, dataRoot, hermesHome string) {
 	r.Post("/api/workspace/upload", func(w http.ResponseWriter, req *http.Request) {
 		workspaceUpload(w, req, db)
 	})
-	r.Post("/api/chat/cancel", func(w http.ResponseWriter, _ *http.Request) {
-		// cancel is handled by client disconnect of the SSE; this endpoint
-		// exists for FE parity.
-		wave4WriteJSON(w, 200, map[string]any{"ok": true, "cancelled": true})
-	})
+	// POST /api/chat/cancel moved to ChatRouter (chat.go) — this wave8 stub
+	// was a no-op that masked the real cancel wiring.
 }
 
 var _ = sha256.Sum256

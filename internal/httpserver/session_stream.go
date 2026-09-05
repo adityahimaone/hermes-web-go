@@ -48,6 +48,20 @@ func (s *sessionStreamState) ActiveForSession(sid string) string {
 	return v
 }
 
+// SessionForStream is the inverse lookup of ActiveForSession: which live
+// session owns streamID. Used by POST /api/chat/cancel to resolve the FE's
+// stream_id query param back to the session whose turn must be aborted.
+func (s *sessionStreamState) SessionForStream(streamID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for sid, active := range s.m {
+		if active == streamID {
+			return sid
+		}
+	}
+	return ""
+}
+
 // SessionStreamRouter mounts the persistent per-session SSE channel.
 // This is Option X: lives across turns, emits `initial` immediately,
 // plus on-subscribe self-heal frames (`server_turn_started` with

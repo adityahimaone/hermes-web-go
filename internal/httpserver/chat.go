@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +20,16 @@ import (
 	"hermes-web-go/internal/stream"
 )
 
-// ChatHandler wires the /api/chat* routes onto r. It needs the session store
+// turnCancels tracks the in-flight turn cancel funcs keyed by stream_id so
+// POST /api/chat/cancel can abort the relay goroutine (finishTurn then
+// persists the partial answer and emits the canonical done).
+var turnCancels sync.Map // stream_id -> context.CancelFunc
+
+// pendingStaleAfter bounds the 409 overlapping-turn guard: a pending_started_at
+// older than this is a crashed turn (VPS restart mid-stream) and is reclaimed.
+const pendingStaleAfter = 15 * time.Minute
+
+// ChatRouter wires the /api/chat* routes onto r. It needs the session store
 // (db) and the agent transport (client). When client is nil the routes are
 // not registered, so the catch-all proxy can keep serving them (Phase 4
 // cutover keeps proxy fallback until the runner is verified live).
@@ -27,6 +37,51 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 	if db == nil || reg == nil || client == nil {
 		return
 	}
+
+	r.Post("/api/chat/cancel", func(w http.ResponseWriter, req *http.Request) {
+		// Python parity: stop an in-flight turn. FE (static/boot.js
+		// cancelStream) calls ?stream_id=<id>; the session-side commands use
+		// {"stream_id": "..."} JSON. Resolves stream -> session, aborts the
+		// relay goroutine via turnCancels so finishTurn persists the partial
+		// answer and emits the canonical done, then asks the agent transport
+		// to cancel the upstream run.
+		q := req.URL.Query().Get("stream_id")
+		var payload struct {
+			StreamID string `json:"stream_id"`
+		}
+		if q == "" {
+			_ = json.NewDecoder(req.Body).Decode(&payload)
+		}
+		streamID := q
+		if streamID == "" {
+			streamID = payload.StreamID
+		}
+		if streamID == "" {
+			writeError(w, http.StatusBadRequest, "stream_id required")
+			return
+		}
+		sessionID := sessStreams.SessionForStream(streamID)
+		if sessionID == "" {
+			writeError(w, http.StatusNotFound, "stream not found")
+			return
+		}
+		if c, ok := turnCancels.LoadAndDelete(streamID); ok {
+			if cancelFn, ok := c.(context.CancelFunc); ok {
+				cancelFn()
+			}
+		}
+		cancelErr := client.Cancel(req.Context(), sessionID)
+		result := map[string]any{
+			"ok":         cancelErr == nil,
+			"cancelled":  cancelErr == nil,
+			"session_id": sessionID,
+			"stream_id":  streamID,
+		}
+		if cancelErr != nil {
+			result["error"] = cancelErr.Error()
+		}
+		writeJSON(w, result)
+	})
 
 	r.Post("/api/chat/start", func(w http.ResponseWriter, req *http.Request) {
 		var body struct {
@@ -62,6 +117,22 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			return
 		}
 
+		// Python parity: a session with a live turn rejects a second
+		// concurrent turn with a typed 409. pending_started_at older than
+		// pendingStaleAfter is a crashed turn (restart mid-stream) and is
+		// simply reclaimed by the SetSessionPending below.
+		if row.PendingStartedAt > 0 && time.Since(time.Unix(int64(row.PendingStartedAt), 0)) < pendingStaleAfter {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":              "turn already active",
+				"session_id":         sessionID,
+				"stream_id":          row.ActiveStreamID,
+				"pending_started_at": row.PendingStartedAt,
+			})
+			return
+		}
+
 		workspace := body.Workspace
 		if workspace == "" {
 			workspace = row.Workspace
@@ -87,8 +158,10 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		_ = store.SetSessionPending(db, sessionID, float64(time.Now().UnixNano())/1e9, streamID, msg)
 
 		ctx, cancel := context.WithCancel(context.Background())
+		turnCancels.Store(streamID, cancel)
 		go func() {
 			defer cancel()
+			defer turnCancels.Delete(streamID)
 			// journal terminal via finishTurn
 			var answer strings.Builder
 			var reasoning strings.Builder
@@ -200,6 +273,12 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 			// Relay events from the agent into the stream registry channel.
 			for {
 				select {
+				case <-ctx.Done():
+					// Cancelled (client /api/chat/cancel or shutdown):
+					// persist whatever accumulated before the abort so a
+					// partial answer is never silently dropped, then exit.
+					finishTurn("interrupted")
+					return
 				case ev, ok := <-evCh:
 					if !ok {
 						log.Printf("chat: turn finished session=%s tokens=%d", sessionID, tokenCount)
