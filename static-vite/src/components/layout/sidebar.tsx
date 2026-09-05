@@ -8,6 +8,10 @@ import { NavRail } from './nav-rail'
 import { SessionList } from '../sessions/session-list'
 import { useSessions } from '../../hooks/useSessions'
 import type { SessionMeta } from '../../state/types'
+import { TasksPanel } from '../panels/tasks-panel'
+import { SkillsPanel } from '../panels/skills-panel'
+import { MemoryPanel } from '../panels/memory-panel'
+import { TodosPanel } from '../panels/todos-panel'
 
 export function Sidebar({
   activeSession,
@@ -130,16 +134,37 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* Placeholder panel-views for the remaining tabs — same wrapper as
-          vanilla; contents fill in at their phases (E). Active state follows
-          the nav rail. */}
-      {(['tasks', 'kanban', 'skills', 'memory', 'todos', 'insights', 'profiles', 'logs'] as const).map((panel) => (
-        <div
-          className={`panel-view${activePanel === panel ? ' active' : ''}`}
-          id={`panel${panel[0].toUpperCase()}${panel.slice(1)}`}
-          key={panel}
-        />
-      ))}
+      {/* Remaining panel-views. Phase E1: tasks/skills/memory/todos wired;
+          kanban/insights/profiles/logs stay placeholders until E2. Active
+          state follows the nav rail. */}
+      <div className={`panel-view${activePanel === 'tasks' ? ' active' : ''}`} id="panelTasks">
+        <div className="panel-head">
+          <span data-i18n="scheduled_jobs">{t('scheduled_jobs')}</span>
+        </div>
+        <TasksPanel />
+      </div>
+      <div className={`panel-view${activePanel === 'kanban' ? ' active' : ''}`} id="panelKanban" />
+      <div className={`panel-view${activePanel === 'skills' ? ' active' : ''}`} id="panelSkills">
+        <div className="panel-head">
+          <span data-i18n="tab_skills">{t('tab_skills')}</span>
+        </div>
+        <SkillsPanel />
+      </div>
+      <div className={`panel-view${activePanel === 'memory' ? ' active' : ''}`} id="panelMemory">
+        <div className="panel-head">
+          <span data-i18n="personal_memory">{t('personal_memory')}</span>
+        </div>
+        <MemoryPanel activeSessionId={activeSession?.session_id ?? null} />
+      </div>
+      <div className={`panel-view${activePanel === 'todos' ? ' active' : ''}`} id="panelTodos">
+        <div className="panel-head">
+          <span data-i18n="current_task_list">{t('current_task_list')}</span>
+        </div>
+        <TodosPanel />
+      </div>
+      <div className={`panel-view${activePanel === 'insights' ? ' active' : ''}`} id="panelInsights" />
+      <div className={`panel-view${activePanel === 'profiles' ? ' active' : ''}`} id="panelProfiles" />
+      <div className={`panel-view${activePanel === 'logs' ? ' active' : ''}`} id="panelLogs" />
       <div className={`panel-view${activePanel === 'settings' ? ' active' : ''}`} id="panelSettings" />
 
       <div className="resize-handle" id="sidebarResize" />
