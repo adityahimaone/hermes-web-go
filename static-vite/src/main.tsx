@@ -6,17 +6,19 @@ import { NavRail } from './components/layout/nav-rail'
 import { Sidebar } from './components/layout/sidebar'
 import { MainView } from './components/layout/main-view'
 import { loadLocale } from './i18n'
+import { useChatStream } from './hooks/useChatStream'
 
 loadLocale()
 
 function Shell() {
+  const chat = useChatStream()
   return (
     <>
       <AppTitlebar />
       <div className="layout">
         <NavRail />
         <Sidebar />
-        <MainView />
+        <MainView state={chat.state} onSend={(text) => void chat.send(text)} />
       </div>
     </>
   )
