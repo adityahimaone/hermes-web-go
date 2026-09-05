@@ -21,6 +21,17 @@
 @import "./styles/tokens.css";
 @import "./styles/chrome.css";
 
+/* Fix: vanilla body is flex-column with .layout as direct child (flex:1).
+   Vite mounts inside #root, so #root must relay the flex — otherwise
+   .layout only gets its intrinsic height and leaves ~243px dead space. */
+#root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
 /* Layout chrome (titlebar / rail / sidebar / main / composer) uses the
    vanilla CLASS NAMES + chrome.css above; React components (Phase B) render
    the same DOM structure as vanilla index.html's <body>. Tailwind utilities
