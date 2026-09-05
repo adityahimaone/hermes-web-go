@@ -40,7 +40,7 @@ function MessageBody({ m, idx }: { m: ChatMessage; idx: number }) {
   if (m.role === 'user') {
     const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
     return (
-      <div className="msg-row" data-role="user" data-msg-idx={idx}>
+      <div className="msg-row" data-role="user" data-msg-idx={idx} id={`msg-user-${idx}`}>
         <div className="msg-body" dangerouslySetInnerHTML={{ __html: renderMd(text) }} />
         {Array.isArray(m.attachments) && m.attachments.length ? (
           <div className="msg-attachments">{m.attachments.join(', ')}</div>

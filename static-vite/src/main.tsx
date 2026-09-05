@@ -13,6 +13,13 @@ import type { SessionMeta } from './state/types'
 
 loadLocale()
 
+// Pathname routing (boot.js port, doc 15 §5): /login renders the Login
+// route instead of the chat shell. Onboarding wizard stays vanilla-phase E5.
+function isLoginRoute(): boolean {
+  const re = /(?:^|\/)login$/
+  return re.test(window.location.pathname.replace(/\/+$/, ''))
+}
+
 function Shell() {
   const chat = useChatStream()
   // Active session: set by useSessions.loadSession; drives workspace + chat view.
@@ -76,9 +83,17 @@ function Shell() {
 
 const rootEl = document.getElementById('root')
 if (rootEl) {
+  // Lazy login route keeps the chat shell out of the login bundle path.
+  const LoginRoute = React.lazy(() => import('./components/auth/login-route'))
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
-      <Shell />
+      {isLoginRoute() ? (
+        <React.Suspense fallback={null}>
+          <LoginRoute />
+        </React.Suspense>
+      ) : (
+        <Shell />
+      )}
     </React.StrictMode>,
   )
 }

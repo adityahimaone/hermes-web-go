@@ -1,9 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { t } from '../../i18n'
 import { HermesEmptyMark } from '../ui/hermes-mark'
 import { MessageList } from '../chat/message-list'
 import { ApprovalCard, ClarifyCard } from '../chat/approval-clarify'
 import { LiveRunStatus } from '../chat/live-run-status'
+import { OutlinePanel } from '../outline/outline-panel'
+import { CmdDropdown } from '../commands/cmd-dropdown'
+import { useSlashCommands } from '../../hooks/useSlashCommands'
 import type { AppState } from '../../state/types'
 import type { UseChatStream } from '../../hooks/useChatStream'
 import { useWorklogTiming } from '../../hooks/useWorklogTiming'
@@ -34,6 +37,23 @@ export function MainView({
   }, [])
 
   const hasMessages = state.messages.length > 0 || state.toolCalls.length > 0
+  const [composerText, setComposerText] = useState('')
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const slash = useSlashCommands(composerText)
+
+  const applySlash = (name: string) => {
+    setComposerText('/' + name + ' ')
+    document.getElementById('msg')?.focus()
+  }
+
+  const jumpToUserMessage = (rawIdx: number) => {
+    document.getElementById(`msg-user-${rawIdx}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    const row = document.getElementById(`msg-user-${rawIdx}`)
+    if (row) {
+      row.classList.add('outline-jump-flash')
+      window.setTimeout(() => row.classList.remove('outline-jump-flash'), 1200)
+    }
+  }
 
   return (
     <main className="main">
@@ -49,9 +69,18 @@ export function MainView({
           <button id="scrollToBottomBtn" className="scroll-to-bottom-btn" style={{ display: 'none' }} type="button" aria-label={t('session_jump_end_label')} data-i18n-aria-label="session_jump_end_label" data-i18n-title="session_jump_end_label" title={t('session_jump_end_label')}>
             <span aria-hidden="true">↓</span><span className="session-jump-btn__text" data-i18n="session_jump_end">{t('session_jump_end')}</span>
           </button>
-          <button id="outlineToggleBtn" type="button" hidden title={t('conversation_outline')} aria-label={t('conversation_outline')} aria-controls="outlinePanelWrapper">
+          <button id="outlineToggleBtn" type="button" title={t('conversation_outline')} aria-label={t('conversation_outline')} aria-controls="outlinePanelWrapper"
+            onClick={() => setOutlineOpen((prev) => !prev)}>
             ☰
           </button>
+
+          <OutlinePanel
+            messages={state.messages}
+            sessionId={activeSession?.session_id ?? null}
+            open={outlineOpen}
+            onClose={() => setOutlineOpen(false)}
+            onJump={jumpToUserMessage}
+          />
 
           <div className="messages" id="messages">
             {!hasMessages ? (
@@ -124,17 +153,25 @@ export function MainView({
             ) : null}
           </div>
           <div className="composer-box" id="composerBox">
+            <CmdDropdown matches={slash.matches} selectedIdx={slash.selectedIdx} onSelect={applySlash} />
             <textarea
               id="msg"
               placeholder="Message Hermes…"
               rows={1}
+              value={composerText}
+              onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={(e) => {
+                if (slash.visible && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                  e.preventDefault()
+                  slash.nav(e.key === 'ArrowDown' ? 1 : -1)
+                  return
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   const el = e.currentTarget
                   if (el.value.trim() && !state.busy) {
                     void chat.send(el.value)
-                    el.value = ''
+                    setComposerText('')
                   }
                 }
               }}
@@ -150,10 +187,9 @@ export function MainView({
                   data-i18n-aria-label="composer_send"
                   disabled={state.busy}
                   onClick={() => {
-                    const el = document.getElementById('msg') as HTMLTextAreaElement | null
-                    if (el && el.value.trim() && !state.busy) {
-                      void chat.send(el.value)
-                      el.value = ''
+                    if (composerText.trim() && !state.busy) {
+                      void chat.send(composerText)
+                      setComposerText('')
                     }
                   }}
                 >
