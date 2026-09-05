@@ -206,7 +206,9 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 						finishTurn("")
 						return
 					}
-					// accumulate token/reasoning text before forwarding
+					// accumulate token/reasoning/interim text before forwarding.
+					// token = incremental delta; interim_assistant = full visible
+					// snippet with already_streamed guard (Python §9655).
 					if ev.Type == agentclient.EventToken {
 						answer.WriteString(ev.Text)
 						tokenCount++
@@ -215,6 +217,28 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 						}
 					} else if ev.Type == agentclient.EventReasoning {
 						reasoning.WriteString(ev.Text)
+					} else if string(ev.Type) == "interim_assistant" {
+						alreadyStreamed := false
+						if ev.Data != nil {
+							if v, ok := ev.Data["already_streamed"]; ok {
+								switch x := v.(type) {
+								case bool:
+									alreadyStreamed = x
+								case string:
+									alreadyStreamed = x == "true" || x == "1"
+								}
+							}
+						}
+						if !alreadyStreamed && ev.Text != "" {
+							if answer.Len() > 0 {
+								answer.WriteString("\n\n")
+							}
+							answer.WriteString(ev.Text)
+							tokenCount++
+							if firstTokenAt == 0 {
+								firstTokenAt = float64(time.Now().UnixNano()) / 1e9
+							}
+						}
 					}
 					// §5.1: run.completed is informational only — done is the
 					// single completion signal. Swallow it so the frontend
@@ -326,6 +350,21 @@ func ChatRouter(r chi.Router, db *sql.DB, reg *stream.JournalRegistry, client ag
 		for ev := range evCh {
 			if ev.Type == agentclient.EventToken {
 				answer += ev.Text
+			} else if string(ev.Type) == "interim_assistant" {
+				// Python §9655: interim_assistant carries a full visible snippet;
+				// already_streamed=true is an echo and must not be re-appended.
+				alreadyStreamed := false
+				if v, ok := ev.Data["already_streamed"]; ok {
+					if b, isBool := v.(bool); isBool {
+						alreadyStreamed = b
+					}
+				}
+				if !alreadyStreamed && ev.Text != "" {
+					if answer != "" {
+						answer += "\n\n"
+					}
+					answer += ev.Text
+				}
 			}
 			if ev.Type == agentclient.EventError {
 				writeError(w, http.StatusInternalServerError, "agent error: "+ev.Error)

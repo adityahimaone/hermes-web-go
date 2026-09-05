@@ -578,3 +578,84 @@ func TestChatStreamNotFound(t *testing.T) {
 		t.Fatalf("missing stream status = %d", resp.StatusCode)
 	}
 }
+
+// TestChatInterimAssistantPersistsAnswer is the regression test for the
+// empty-"Hermes"-response screenshot bug: a turn whose visible answer arrives
+// via interim_assistant events (reasoning-effort profiles; Python §9655 sends
+// full visible snippets with an already_streamed echo guard) must accumulate
+// into the persisted assistant message — previously only EventToken fed the
+// accumulator, so finishTurn persisted an empty answer.
+func TestChatInterimAssistantPersistsAnswer(t *testing.T) {
+	db := testDB(t)
+	if err := store.CreateSession(db, store.SessionImport{ID: "interim1", Title: "", Workspace: "/tmp", Model: "codex", Messages: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeClient{
+		started: make(chan TurnRequestCapture, 1),
+		events: []agentclient.TurnEvent{
+			{Type: agentclient.EventType("interim_assistant"), Text: "Checked the docs.", Data: map[string]any{"already_streamed": false}},
+			{Type: agentclient.EventType("interim_assistant"), Text: "Running the fix now.", Data: nil},
+			// Echo frames must be skipped, not appended.
+			{Type: agentclient.EventType("interim_assistant"), Text: "Running the fix now.", Data: map[string]any{"already_streamed": true}},
+			{Type: agentclient.EventDone},
+		},
+	}
+	r := NewRouterWithAgent("", nil, db, "", fake, approval.NewStore())
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/chat/start", "application/json", bytes.NewBufferString(`{"session_id":"interim1","message":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("start status = %d", resp.StatusCode)
+	}
+	var startResp struct {
+		StreamID string `json:"stream_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&startResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Raw SSE: interim_assistant frames must be relayed to the browser.
+	sresp, err := http.Get(ts.URL + "/api/chat/stream?stream_id=" + startResp.StreamID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := io.ReadAll(sresp.Body)
+	sresp.Body.Close()
+	if !strings.Contains(string(out), "event: interim_assistant") || !strings.Contains(string(out), "Checked the docs.") {
+		t.Fatalf("stream missing interim_assistant relay: %q", string(out))
+	}
+	if !strings.Contains(string(out), "event: done") {
+		t.Fatalf("stream missing done: %q", string(out))
+	}
+
+	// Persisted session: the assistant answer must be the two non-echo
+	// snippets joined with the Python-parity "\n\n" separator — not empty.
+	row, err := store.GetSession(db, "interim1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []map[string]any
+	if err := json.Unmarshal([]byte(row.Messages), &messages); err != nil {
+		t.Fatal(err)
+	}
+	var answer string
+	for _, m := range messages {
+		if role, _ := m["role"].(string); role == "assistant" {
+			if s, ok := m["content"].(string); ok {
+				answer = s
+			}
+		}
+	}
+	want := "Checked the docs.\n\nRunning the fix now."
+	if answer != want {
+		t.Fatalf("persisted answer = %q, want %q (all messages: %s)", answer, want, row.Messages)
+	}
+	if !strings.Contains(row.Messages, "_turnDuration") {
+		t.Fatalf("assistant message missing _turnDuration metadata: %s", row.Messages)
+	}
+}
